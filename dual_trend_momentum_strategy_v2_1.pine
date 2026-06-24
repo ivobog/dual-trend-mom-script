@@ -1,0 +1,1756 @@
+//@version=6
+strategy(
+     "Dual Trend Momentum Strategy Tester v2.1",
+     overlay=true,
+     max_labels_count=500,
+     initial_capital=100000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=10,
+     commission_type=strategy.commission.percent,
+     commission_value=0.05,
+     slippage=1,
+     pyramiding=0,
+     calc_on_every_tick=true
+)
+
+// ============================================================================
+// Dual Trend Momentum Strategy Tester v2.1
+// Backtest companion for the indicator.
+//
+// Added in v2.1:
+// - Chronology-safe pullback depth.
+// - Pivot-based higher-high / higher-low structure.
+// - Breakout-level anchored failed breakout detection.
+// - Notional liquidity filter.
+// - Stop/target calculation from actual strategy fill.
+// - Engine version display.
+//
+// This script keeps the Step 3 score engine:
+// - Trend Score 0-10
+// - Momentum Score 0-10
+// - Setup Score 0-10
+// - Risk Score 0-10
+// - Market Score 0-10
+// - Relative Strength Score 0-10
+// - Dual Score 0-10
+// ============================================================================
+
+
+// ============================================================================
+// Input groups
+// ============================================================================
+groupTrend      = "1. Trend Settings"
+groupMomentum   = "2. Momentum / RSI / Volume Settings"
+groupPullback   = "3. Pullback / Breakout Settings"
+groupRisk       = "4. Risk / Extension Settings"
+groupMarketRs   = "5. Market Regime + Relative Strength"
+groupMtf        = "6. Multi-Timeframe Trend"
+groupDisplay    = "7. Display Settings"
+groupStrategy   = "8. Strategy Tester"
+
+
+// ============================================================================
+// Inputs: Trend
+// ============================================================================
+emaFastLen = input.int(10, "Fast EMA", minval=1, group=groupTrend)
+emaPullbackLen = input.int(20, "Pullback EMA", minval=1, group=groupTrend)
+smaMidLen = input.int(50, "Mid SMA", minval=1, group=groupTrend)
+smaTrendLen = input.int(150, "Trend SMA", minval=1, group=groupTrend)
+smaSlowLen = input.int(200, "Slow SMA / Major Trend Filter", minval=1, group=groupTrend)
+
+midSlopeLookback = input.int(10, "Mid SMA Slope Lookback", minval=1, group=groupTrend)
+slowSlopeLookback = input.int(20, "Slow SMA Slope Lookback", minval=1, group=groupTrend)
+
+adxLen = input.int(14, "DMI Length", minval=1, group=groupTrend)
+adxSmoothing = input.int(14, "ADX Smoothing", minval=1, group=groupTrend)
+minAdxTrend = input.float(18.0, "Minimum ADX For Trend Credit", step=0.5, group=groupTrend)
+
+structureLookback = input.int(20, "Higher High / Higher Low Lookback", minval=5, group=groupTrend)
+pivotLeftBars = input.int(3, "Structure Pivot Left Bars", minval=1, group=groupTrend)
+pivotRightBars = input.int(3, "Structure Pivot Right Bars", minval=1, group=groupTrend)
+highLow52Len = input.int(252, "52-Week Position Lookback", minval=50, group=groupTrend)
+
+
+// ============================================================================
+// Inputs: Momentum / RSI / Volume
+// ============================================================================
+rsiLen = input.int(14, "RSI Length", minval=1, group=groupMomentum)
+atrLen = input.int(14, "ATR Length", minval=1, group=groupMomentum)
+volLen = input.int(20, "Average Volume Length", minval=1, group=groupMomentum)
+
+greenRedVolLookback = input.int(10, "Green vs Red Volume Lookback", minval=2, group=groupMomentum)
+recentRedVolLookback = input.int(5, "Recent Red Volume Lookback", minval=2, group=groupMomentum)
+distributionLookback = input.int(10, "Distribution Lookback", minval=2, group=groupMomentum)
+
+obvSmaLen = input.int(20, "OBV SMA Length", minval=2, group=groupMomentum)
+obvSlopeLookback = input.int(10, "OBV Rising Lookback", minval=2, group=groupMomentum)
+
+
+// ============================================================================
+// Inputs: Pullback / Breakout
+// ============================================================================
+pullbackLookback = input.int(20, "Pullback Lookback", minval=5, group=groupPullback)
+breakoutLookback = input.int(40, "Resistance / Breakout Lookback", minval=10, group=groupPullback)
+
+minPullbackPct = input.float(3.0, "Minimum Pullback %", step=0.1, group=groupPullback)
+maxPullbackPct = input.float(18.0, "Maximum Healthy Pullback %", step=0.1, group=groupPullback)
+maTouchPct = input.float(4.0, "Near MA Support %", step=0.1, group=groupPullback)
+
+breakoutVolRatio = input.float(1.20, "Breakout Volume Ratio", step=0.05, group=groupPullback)
+failureVolRatio = input.float(1.10, "Failed Breakout Volume Ratio", step=0.05, group=groupPullback)
+
+
+// ============================================================================
+// Inputs: Risk / Extension
+// ============================================================================
+extensionWarnPct = input.float(8.0, "Extension Warning Above 50 SMA %", step=0.1, group=groupRisk)
+extensionDangerPct = input.float(15.0, "Danger Extension Above 50 SMA %", step=0.1, group=groupRisk)
+
+heavyRedVolRatio = input.float(1.50, "Heavy Red Volume Ratio", step=0.05, group=groupRisk)
+nearResistancePct = input.float(3.0, "Near Resistance %", step=0.1, group=groupRisk)
+failedBreakoutBars = input.int(8, "Failed Breakout Window", minval=1, group=groupRisk)
+
+atrWarnPct = input.float(6.0, "ATR % Warning", step=0.1, group=groupRisk)
+atrDangerPct = input.float(10.0, "ATR % Danger", step=0.1, group=groupRisk)
+gapExhaustionPct = input.float(4.0, "Gap Exhaustion %", minval=0.5, step=0.1, group=groupRisk)
+gapExhaustionVolRatio = input.float(1.30, "Gap Exhaustion Volume Ratio", minval=0.1, step=0.05, group=groupRisk)
+minAvgVolume = input.float(300000, "Minimum Average Volume", minval=0.0, step=50000, group=groupRisk)
+useLiquidityWarning = input.bool(true, "Use Liquidity Warning", group=groupRisk)
+useNotionalLiquidityFilter = input.bool(true, "Use Notional Liquidity Filter", group=groupRisk)
+minNotionalVolume = input.float(10000000, "Minimum Avg Notional Volume", minval=0.0, step=1000000, group=groupRisk)
+notionalVolumeLookback = input.int(20, "Notional Volume Lookback", minval=1, group=groupRisk)
+
+stopMode = input.string(
+     "Recent swing low",
+     "Suggested Stop Mode",
+     options=["Recent swing low", "SMA 50 minus ATR buffer", "ATR multiple"],
+     group=groupRisk
+)
+atrStopMultiple = input.float(1.50, "ATR Stop Multiple", minval=0.1, step=0.1, group=groupRisk)
+smaStopAtrBuffer = input.float(0.50, "SMA 50 Stop ATR Buffer", minval=0.0, step=0.1, group=groupRisk)
+targetRewardMultiple = input.float(2.0, "Target R Multiple", minval=0.5, step=0.25, group=groupRisk)
+minRewardRisk = input.float(2.0, "Minimum Reward/Risk", minval=0.5, step=0.25, group=groupRisk)
+useRewardRiskFilter = input.bool(true, "Require Reward/Risk For Buyable Signals", group=groupRisk)
+showRiskRewardPlots = input.bool(true, "Show Stop / Target Lines", group=groupRisk)
+
+
+// ============================================================================
+// Inputs: Market Regime + Relative Strength
+// ============================================================================
+useMarketFilter = input.bool(true, "Require Market Regime For Buyable Signals", group=groupMarketRs)
+useRelativeStrengthFilter = input.bool(true, "Require Relative Strength For Buyable Signals", group=groupMarketRs)
+useSectorBenchmark = input.bool(false, "Use Sector Benchmark In RS Score", group=groupMarketRs)
+
+marketSymbol = input.symbol("AMEX:SPY", "Market Regime Symbol", group=groupMarketRs)
+benchmarkSymbol = input.symbol("AMEX:SPY", "Relative Strength Benchmark", group=groupMarketRs)
+sectorSymbol = input.symbol("NASDAQ:QQQ", "Sector Benchmark", group=groupMarketRs)
+
+marketMinScore = input.float(5.5, "Minimum Market Score", minval=0.0, maxval=10.0, step=0.1, group=groupMarketRs)
+rsMinScore = input.float(5.5, "Minimum Relative Strength Score", minval=0.0, maxval=10.0, step=0.1, group=groupMarketRs)
+sectorMinScore = input.float(5.0, "Minimum Sector RS Score", minval=0.0, maxval=10.0, step=0.1, group=groupMarketRs)
+marketDistributionMax = input.int(4, "Market Risk-Off Distribution Count", minval=1, group=groupMarketRs)
+marketRiskOffPenalty = input.float(2.0, "Market Risk-Off Score Penalty", minval=0.0, maxval=5.0, step=0.25, group=groupMarketRs)
+
+rsSmaLen = input.int(50, "RS Line SMA Length", minval=5, group=groupMarketRs)
+
+rocShortLen = input.int(21, "Short ROC Length", minval=5, group=groupMarketRs)
+rocMediumLen = input.int(63, "Medium ROC Length", minval=10, group=groupMarketRs)
+rocLongLen = input.int(126, "Long ROC Length", minval=20, group=groupMarketRs)
+
+rsNewHighLookback = input.int(21, "RS New High Lookback", minval=5, group=groupMarketRs)
+
+
+// ============================================================================
+// Inputs: Multi-Timeframe Trend
+// ============================================================================
+useHtfTrendFilter = input.bool(true, "Require HTF Trend For Buyable Signals", group=groupMtf)
+blendHtfIntoTrendScore = input.bool(true, "Blend HTF Score Into Trend Score", group=groupMtf)
+
+htfTimeframe = input.timeframe("W", "Higher Timeframe", group=groupMtf)
+useConfirmedHtf = input.bool(true, "Use Confirmed HTF Bars", group=groupMtf)
+
+htfFastLen = input.int(10, "HTF Fast EMA", minval=1, group=groupMtf)
+htfMidLen = input.int(30, "HTF Mid SMA", minval=1, group=groupMtf)
+htfSlowLen = input.int(40, "HTF Slow SMA", minval=1, group=groupMtf)
+
+htfSlopeLookback = input.int(4, "HTF Slope Lookback", minval=1, group=groupMtf)
+htfRocLookback = input.int(13, "HTF ROC Lookback", minval=2, group=groupMtf)
+
+htfMinScore = input.float(5.5, "Minimum HTF Score", minval=0.0, maxval=10.0, step=0.1, group=groupMtf)
+
+
+// ============================================================================
+// Inputs: Display
+// ============================================================================
+showTable = input.bool(true, "Show Score Table", group=groupDisplay)
+showLabel = input.bool(true, "Show Last-Bar Label", group=groupDisplay)
+showBackground = input.bool(true, "Show Background Colors", group=groupDisplay)
+
+showMarketRsPlots = input.bool(false, "Show Market / RS Plots On Chart", group=groupDisplay)
+showDebugPlots = input.bool(false, "Show Debug Plots", group=groupDisplay)
+
+
+// ============================================================================
+// Inputs: Strategy Tester
+// ============================================================================
+tradePrimePullback = input.bool(true, "Trade Prime Clean Pullback", group=groupStrategy)
+tradeCleanPullback = input.bool(true, "Trade Clean Bull Pullback", group=groupStrategy)
+tradeFreshBreakout = input.bool(true, "Trade Fresh Breakout", group=groupStrategy)
+tradeMomentumContinuation = input.bool(false, "Trade Momentum Continuation", group=groupStrategy)
+
+exitOnDangerSignal = input.bool(true, "Exit On Distribution / Failed Breakout / Blowoff", group=groupStrategy)
+exitOnMarketRiskOff = input.bool(true, "Exit On Market Risk-Off", group=groupStrategy)
+exitOnGapExhaustion = input.bool(true, "Exit On Gap Exhaustion", group=groupStrategy)
+exitOnCloseBelowMidSma = input.bool(false, "Exit On Close Below SMA 50", group=groupStrategy)
+moveStopToBreakeven = input.bool(true, "Move Stop To Breakeven", group=groupStrategy)
+breakevenAtR = input.float(1.0, "Breakeven Trigger R", minval=0.25, step=0.25, group=groupStrategy)
+useAtrTrail = input.bool(false, "Use ATR Trailing Stop", group=groupStrategy)
+atrTrailMultiple = input.float(2.0, "ATR Trail Multiple", minval=0.25, step=0.25, group=groupStrategy)
+useMaxBarsExit = input.bool(true, "Exit After Max Bars", group=groupStrategy)
+maxBarsInTrade = input.int(10, "Max Bars In Trade", minval=1, group=groupStrategy)
+useDateFilter = input.bool(false, "Use Backtest Date Filter", group=groupStrategy)
+startDate = input.time(1577836800000, "Start Date", group=groupStrategy)
+endDate = input.time(2082758340000, "End Date", group=groupStrategy)
+
+
+// ============================================================================
+// Constants
+// ============================================================================
+string ENGINE_VERSION              = "2.1.0"
+
+string CLASS_PRIME_PULLBACK       = "Prime clean pullback"
+string CLASS_CLEAN_PULLBACK       = "Clean bull pullback"
+string CLASS_FRESH_BREAKOUT       = "Fresh breakout"
+string CLASS_MOMENTUM_CONT        = "Momentum continuation"
+string CLASS_EXTENDED_MOMENTUM    = "Extended momentum"
+string CLASS_OVERHEATED_MOMENTUM  = "Overheated momentum"
+string CLASS_FILTERED_PULLBACK    = "Filtered pullback"
+string CLASS_FILTERED_MOMENTUM    = "Filtered momentum"
+string CLASS_TREND_REPAIR         = "Trend repair"
+string CLASS_DISTRIBUTION_RISK    = "Distribution risk"
+string CLASS_BLOWOFF_TOP          = "Blowoff top"
+string CLASS_FAILED_BREAKOUT      = "Failed breakout"
+string CLASS_NO_TRADE             = "No trade"
+
+string PULLBACK_HEALTHY           = "Healthy"
+string PULLBACK_MIXED             = "Mixed"
+string PULLBACK_DANGEROUS         = "Dangerous"
+
+string MARKET_BULLISH             = "Bullish"
+string MARKET_MIXED               = "Mixed"
+string MARKET_BEARISH             = "Bearish"
+string MARKET_RISK_OFF            = "Risk-off"
+
+string RS_STRONG                  = "Strong"
+string RS_NEUTRAL                 = "Neutral"
+string RS_WEAK                    = "Weak"
+
+string HTF_STRONG                 = "Strong"
+string HTF_NEUTRAL                = "Neutral"
+string HTF_WEAK                   = "Weak"
+
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+clamp(float value, float minValue, float maxValue) =>
+    math.max(minValue, math.min(maxValue, value))
+
+rocPct(series float source, int lookback) =>
+    not na(source[lookback]) and source[lookback] != 0.0
+         ? (source - source[lookback]) / source[lookback] * 100.0
+         : 0.0
+
+slopePct(series float source, int lookback) =>
+    not na(source[lookback]) and source[lookback] != 0.0
+         ? (source - source[lookback]) / source[lookback] * 100.0
+         : 0.0
+
+slopeAtr(series float source, int lookback, series float atrValue) =>
+    not na(source[lookback]) and atrValue > 0.0
+         ? (source - source[lookback]) / atrValue
+         : 0.0
+
+pctDistance(float valueA, float valueB, float denominator, float fallback) =>
+    denominator != 0.0 ? math.abs(valueA - valueB) / denominator * 100.0 : fallback
+
+rollingSum(series float source, int length) =>
+    math.sum(source, length)
+
+distributionBar(float volumeMultiplier, int averageVolumeLength) =>
+    distributionAvgVol = ta.sma(volume, averageVolumeLength)
+    close < open and volume > distributionAvgVol * volumeMultiplier and close < close[1] ? 1.0 : 0.0
+
+
+// ============================================================================
+// Core indicators
+// ============================================================================
+emaFast = ta.ema(close, emaFastLen)
+emaPullback = ta.ema(close, emaPullbackLen)
+
+smaMid = ta.sma(close, smaMidLen)
+smaTrend = ta.sma(close, smaTrendLen)
+smaSlow = ta.sma(close, smaSlowLen)
+
+rsi = ta.rsi(close, rsiLen)
+atr = ta.atr(atrLen)
+atrPct = close > 0.0 ? atr / close * 100.0 : 0.0
+
+avgVol = ta.sma(volume, volLen)
+volRatio = avgVol > 0.0 ? volume / avgVol : 0.0
+
+[plusDI, minusDI, adx] = ta.dmi(adxLen, adxSmoothing)
+
+obv = ta.cum(close > close[1] ? volume : close < close[1] ? -volume : 0.0)
+obvSma = ta.sma(obv, obvSmaLen)
+obvRising = not na(obv[obvSlopeLookback]) and obv > obv[obvSlopeLookback] and obv > obvSma
+
+
+// ============================================================================
+// Step 2 retained: Market Regime
+// ============================================================================
+marketClose = request.security(marketSymbol, timeframe.period, close, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+marketSma50 = request.security(marketSymbol, timeframe.period, ta.sma(close, 50), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+marketSma200 = request.security(marketSymbol, timeframe.period, ta.sma(close, 200), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+marketRocShort = request.security(marketSymbol, timeframe.period, rocPct(close, rocShortLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+marketRocMedium = request.security(marketSymbol, timeframe.period, rocPct(close, rocMediumLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+marketDistributionCount = request.security(
+     marketSymbol,
+     timeframe.period,
+     math.sum(distributionBar(1.25, volLen), distributionLookback),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+marketSma50Slope = slopePct(marketSma50, 10)
+
+marketRiskOff =
+     marketDistributionCount >= marketDistributionMax or
+     marketClose < marketSma200 and marketRocShort < 0.0 or
+     marketClose < marketSma50 and marketDistributionCount >= math.max(marketDistributionMax - 1, 1)
+
+marketScore = 0.0
+marketScore += marketClose > marketSma200 ? 2.5 : 0.0
+marketScore += marketClose > marketSma50 ? 2.0 : 0.0
+marketScore += marketSma50 > marketSma200 ? 2.0 : 0.0
+marketScore += marketSma50Slope > 0.0 ? 1.5 : 0.0
+marketScore += marketRocShort > 0.0 ? 1.0 : 0.0
+marketScore += marketRocMedium > 0.0 ? 1.0 : 0.0
+marketScore -= marketRiskOff ? marketRiskOffPenalty : 0.0
+marketScore := clamp(marketScore, 0.0, 10.0)
+
+marketRegime =
+     marketRiskOff ? MARKET_RISK_OFF :
+     marketScore >= 7.0 ? MARKET_BULLISH :
+     marketScore >= 4.5 ? MARKET_MIXED :
+     MARKET_BEARISH
+
+marketGateOk =
+     not useMarketFilter or
+     marketScore >= marketMinScore and not marketRiskOff
+
+
+// ============================================================================
+// Step 2 retained: Relative Strength
+// ============================================================================
+benchmarkClose = request.security(benchmarkSymbol, timeframe.period, close, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+benchmarkRocShort = request.security(benchmarkSymbol, timeframe.period, rocPct(close, rocShortLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+benchmarkRocMedium = request.security(benchmarkSymbol, timeframe.period, rocPct(close, rocMediumLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+benchmarkRocLong = request.security(benchmarkSymbol, timeframe.period, rocPct(close, rocLongLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sectorClose = request.security(sectorSymbol, timeframe.period, close, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sectorRocShort = request.security(sectorSymbol, timeframe.period, rocPct(close, rocShortLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sectorRocMedium = request.security(sectorSymbol, timeframe.period, rocPct(close, rocMediumLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sectorRocLong = request.security(sectorSymbol, timeframe.period, rocPct(close, rocLongLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+stockRocShort = rocPct(close, rocShortLen)
+stockRocMedium = rocPct(close, rocMediumLen)
+stockRocLong = rocPct(close, rocLongLen)
+
+rsLine = benchmarkClose > 0.0 ? close / benchmarkClose : na
+rsSma = ta.sma(rsLine, rsSmaLen)
+
+rsRocShort = rocPct(rsLine, rocShortLen)
+rsRocMedium = rocPct(rsLine, rocMediumLen)
+rsRocLong = rocPct(rsLine, rocLongLen)
+rsLineHigh = ta.highest(rsLine, rsNewHighLookback)
+
+rsNewHigh =
+     not na(rsLine) and
+     rsLine >= rsLineHigh
+
+stockBeatsBenchmarkShort = stockRocShort > benchmarkRocShort
+stockBeatsBenchmarkMedium = stockRocMedium > benchmarkRocMedium
+stockBeatsBenchmarkLong = stockRocLong > benchmarkRocLong
+
+sectorRsLine = sectorClose > 0.0 ? close / sectorClose : na
+sectorRsSma = ta.sma(sectorRsLine, rsSmaLen)
+sectorRsRocShort = rocPct(sectorRsLine, rocShortLen)
+sectorRsRocMedium = rocPct(sectorRsLine, rocMediumLen)
+sectorRsRocLong = rocPct(sectorRsLine, rocLongLen)
+sectorRsLineHigh = ta.highest(sectorRsLine, rsNewHighLookback)
+sectorRsNewHigh = not na(sectorRsLine) and sectorRsLine >= sectorRsLineHigh
+
+stockBeatsSectorShort = stockRocShort > sectorRocShort
+stockBeatsSectorMedium = stockRocMedium > sectorRocMedium
+stockBeatsSectorLong = stockRocLong > sectorRocLong
+
+sectorRelativeStrengthScore = 0.0
+sectorRelativeStrengthScore += not na(sectorRsLine) and not na(sectorRsSma) and sectorRsLine > sectorRsSma ? 2.0 : 0.0
+sectorRelativeStrengthScore += sectorRsRocShort > 0.0 ? 1.5 : 0.0
+sectorRelativeStrengthScore += sectorRsRocMedium > 0.0 ? 1.5 : 0.0
+sectorRelativeStrengthScore += sectorRsRocLong > 0.0 ? 1.0 : 0.0
+sectorRelativeStrengthScore += stockBeatsSectorShort ? 1.5 : 0.0
+sectorRelativeStrengthScore += stockBeatsSectorMedium ? 1.5 : 0.0
+sectorRelativeStrengthScore += stockBeatsSectorLong ? 0.5 : 0.0
+sectorRelativeStrengthScore += sectorRsNewHigh ? 0.5 : 0.0
+sectorRelativeStrengthScore := clamp(sectorRelativeStrengthScore, 0.0, 10.0)
+
+relativeStrengthScore = 0.0
+relativeStrengthScore += not na(rsLine) and not na(rsSma) and rsLine > rsSma ? 2.0 : 0.0
+relativeStrengthScore += rsRocShort > 0.0 ? 1.5 : 0.0
+relativeStrengthScore += rsRocMedium > 0.0 ? 1.5 : 0.0
+relativeStrengthScore += rsRocLong > 0.0 ? 1.0 : 0.0
+relativeStrengthScore += stockBeatsBenchmarkShort ? 1.5 : 0.0
+relativeStrengthScore += stockBeatsBenchmarkMedium ? 1.5 : 0.0
+relativeStrengthScore += stockBeatsBenchmarkLong ? 0.5 : 0.0
+relativeStrengthScore += rsNewHigh ? 0.5 : 0.0
+relativeStrengthScore := clamp(relativeStrengthScore, 0.0, 10.0)
+
+combinedRelativeStrengthScore =
+     useSectorBenchmark
+         ? clamp(relativeStrengthScore * 0.70 + sectorRelativeStrengthScore * 0.30, 0.0, 10.0)
+         : relativeStrengthScore
+
+relativeStrengthStatus =
+     combinedRelativeStrengthScore >= 7.0 ? RS_STRONG :
+     combinedRelativeStrengthScore >= 4.5 ? RS_NEUTRAL :
+     RS_WEAK
+
+sectorRelativeStrengthStatus =
+     sectorRelativeStrengthScore >= 7.0 ? RS_STRONG :
+     sectorRelativeStrengthScore >= 4.5 ? RS_NEUTRAL :
+     RS_WEAK
+
+sectorRelativeStrengthGateOk =
+     not useSectorBenchmark or
+     sectorRelativeStrengthScore >= sectorMinScore
+
+relativeStrengthGateOk =
+     not useRelativeStrengthFilter or
+     combinedRelativeStrengthScore >= rsMinScore and
+     sectorRelativeStrengthGateOk
+
+
+// ============================================================================
+// Step 4: Higher-Timeframe Trend Module
+// ============================================================================
+htfClose = request.security(
+     syminfo.tickerid,
+     htfTimeframe,
+     useConfirmedHtf ? close[1] : close,
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfFastMa = request.security(
+     syminfo.tickerid,
+     htfTimeframe,
+     useConfirmedHtf ? ta.ema(close, htfFastLen)[1] : ta.ema(close, htfFastLen),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfMidMa = request.security(
+     syminfo.tickerid,
+     htfTimeframe,
+     useConfirmedHtf ? ta.sma(close, htfMidLen)[1] : ta.sma(close, htfMidLen),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfSlowMa = request.security(
+     syminfo.tickerid,
+     htfTimeframe,
+     useConfirmedHtf ? ta.sma(close, htfSlowLen)[1] : ta.sma(close, htfSlowLen),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfMidSlopePct = request.security(
+     syminfo.tickerid,
+     htfTimeframe,
+     useConfirmedHtf ? slopePct(ta.sma(close, htfMidLen), htfSlopeLookback)[1] : slopePct(ta.sma(close, htfMidLen), htfSlopeLookback),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfSlowSlopePct = request.security(
+     syminfo.tickerid,
+     htfTimeframe,
+     useConfirmedHtf ? slopePct(ta.sma(close, htfSlowLen), htfSlopeLookback)[1] : slopePct(ta.sma(close, htfSlowLen), htfSlopeLookback),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfRoc = request.security(
+     syminfo.tickerid,
+     htfTimeframe,
+     useConfirmedHtf ? rocPct(close, htfRocLookback)[1] : rocPct(close, htfRocLookback),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
+
+htfDataReady =
+     not na(htfClose) and
+     not na(htfFastMa) and
+     not na(htfMidMa) and
+     not na(htfSlowMa)
+
+htfStackStrong =
+     htfDataReady and
+     htfClose > htfFastMa and
+     htfFastMa > htfMidMa and
+     htfMidMa > htfSlowMa
+
+htfStackBasic =
+     htfDataReady and
+     htfClose > htfMidMa and
+     htfMidMa > htfSlowMa
+
+htfScore = 0.0
+htfScore += htfDataReady and htfClose > htfSlowMa ? 2.00 : 0.0
+htfScore += htfDataReady and htfClose > htfMidMa ? 1.50 : 0.0
+htfScore += htfDataReady and htfFastMa > htfMidMa ? 1.25 : 0.0
+htfScore += htfDataReady and htfMidMa > htfSlowMa ? 1.50 : 0.0
+htfScore += htfMidSlopePct > 0.0 ? 1.25 : 0.0
+htfScore += htfSlowSlopePct > 0.0 ? 1.00 : 0.0
+htfScore += htfRoc > 0.0 ? 1.00 : 0.0
+htfScore += htfStackStrong ? 0.50 : htfStackBasic ? 0.25 : 0.0
+htfScore := clamp(htfScore, 0.0, 10.0)
+
+htfStatus =
+     htfScore >= 7.0 ? HTF_STRONG :
+     htfScore >= 4.5 ? HTF_NEUTRAL :
+     HTF_WEAK
+
+htfGateOk =
+     not useHtfTrendFilter or
+     htfScore >= htfMinScore
+
+allFiltersOk =
+     marketGateOk and
+     relativeStrengthGateOk and
+     htfGateOk
+
+
+// ============================================================================
+// Trend geometry
+// ============================================================================
+midSlopePct = slopePct(smaMid, midSlopeLookback)
+slowSlopePct = slopePct(smaSlow, slowSlopeLookback)
+
+midSlopeAtr = slopeAtr(smaMid, midSlopeLookback, atr)
+slowSlopeAtr = slopeAtr(smaSlow, slowSlopeLookback, atr)
+
+maStackStrong =
+     close > emaPullback and
+     emaPullback > smaMid and
+     smaMid > smaTrend and
+     smaTrend > smaSlow
+
+maStackBasic =
+     close > smaMid and
+     smaMid > smaSlow and
+     close > smaSlow
+
+trendOk =
+     close > smaSlow and
+     smaMid > smaSlow and
+     midSlopePct > 0.0 and
+     slowSlopePct > 0.0
+
+pivotHigh = ta.pivothigh(high, pivotLeftBars, pivotRightBars)
+pivotLow = ta.pivotlow(low, pivotLeftBars, pivotRightBars)
+
+var float lastPivotHigh = na
+var float prevPivotHigh = na
+var float lastPivotLow = na
+var float prevPivotLow = na
+
+if not na(pivotHigh)
+    prevPivotHigh := lastPivotHigh
+    lastPivotHigh := pivotHigh
+
+if not na(pivotLow)
+    prevPivotLow := lastPivotLow
+    lastPivotLow := pivotLow
+
+higherHigh =
+     not na(lastPivotHigh) and
+     not na(prevPivotHigh) and
+     lastPivotHigh > prevPivotHigh
+
+higherLow =
+     not na(lastPivotLow) and
+     not na(prevPivotLow) and
+     lastPivotLow > prevPivotLow
+
+high52 = ta.highest(high, highLow52Len)
+low52 = ta.lowest(low, highLow52Len)
+range52 = math.max(high52 - low52, syminfo.mintick)
+position52 = (close - low52) / range52 * 100.0
+
+near52High = high52 > 0.0 ? (high52 - close) / high52 * 100.0 <= 15.0 : false
+close20High = ta.highest(close[1], 20)
+
+
+// ============================================================================
+// Pullback geometry
+// ============================================================================
+priorHighBarsAgoRaw = ta.highestbars(high[1], pullbackLookback)
+int priorHighBarsAgo = not na(priorHighBarsAgoRaw) ? math.abs(priorHighBarsAgoRaw) + 1 : na
+priorHigh = not na(priorHighBarsAgo) ? high[priorHighBarsAgo] : na
+
+float lowAfterHigh = na
+if not na(priorHighBarsAgo) and priorHighBarsAgo > 0
+    for i = 0 to pullbackLookback - 1
+        if i < priorHighBarsAgo
+            lowAfterHigh := na(lowAfterHigh) ? low[i] : math.min(lowAfterHigh, low[i])
+
+recentLow = lowAfterHigh
+
+pullbackDepthPct =
+     not na(priorHigh) and not na(recentLow) and priorHigh > 0.0
+         ? (priorHigh - recentLow) / priorHigh * 100.0
+         : 0.0
+
+hadPullback = pullbackDepthPct >= minPullbackPct
+notTooDeep = pullbackDepthPct <= maxPullbackPct
+
+fastDistSeries =
+     not na(emaPullback)
+         ? pctDistance(low, emaPullback, close, 999.0)
+         : 999.0
+
+midDistSeries =
+     not na(smaMid)
+         ? pctDistance(low, smaMid, close, 999.0)
+         : 999.0
+
+slowDistSeries =
+     not na(smaSlow)
+         ? pctDistance(low, smaSlow, close, 999.0)
+         : 999.0
+
+nearFastMa = ta.lowest(fastDistSeries, pullbackLookback) <= maTouchPct
+nearMidMa = ta.lowest(midDistSeries, pullbackLookback) <= maTouchPct
+nearSlowMa = ta.lowest(slowDistSeries, pullbackLookback) <= maTouchPct
+
+heldNearSupport = nearFastMa or nearMidMa or nearSlowMa
+
+extensionMidPct =
+     not na(smaMid) and smaMid > 0.0
+         ? (close - smaMid) / smaMid * 100.0
+         : 0.0
+
+
+// ============================================================================
+// Resistance / breakout geometry
+// ============================================================================
+prevResistance = ta.highest(high[1], breakoutLookback)
+
+distanceToResistancePct =
+     not na(prevResistance) and close > 0.0
+         ? (prevResistance - close) / close * 100.0
+         : na
+
+nearResistance =
+     not na(distanceToResistancePct) and
+     distanceToResistancePct >= 0.0 and
+     distanceToResistancePct <= nearResistancePct
+
+freshBreakout =
+     not na(prevResistance) and
+     close > prevResistance and
+     volRatio >= breakoutVolRatio and
+     close > open
+
+
+// ============================================================================
+// Volume quality
+// ============================================================================
+greenVolSeries = close > open ? volume : 0.0
+redVolSeries = close < open ? volume : 0.0
+
+greenCount = rollingSum(close > open ? 1.0 : 0.0, greenRedVolLookback)
+redCount = rollingSum(close < open ? 1.0 : 0.0, greenRedVolLookback)
+
+greenVolAvg = rollingSum(greenVolSeries, greenRedVolLookback) / math.max(greenCount, 1.0)
+redVolAvg = rollingSum(redVolSeries, greenRedVolLookback) / math.max(redCount, 1.0)
+
+greenBeatsRed = greenVolAvg > redVolAvg
+
+redVolRecent = rollingSum(redVolSeries, recentRedVolLookback)
+redVolPrior = redVolRecent[recentRedVolLookback]
+
+redVolDeclining =
+     not na(redVolPrior) and
+     redVolRecent <= redVolPrior
+
+shortVolAvg = ta.sma(volume, 5)
+avgNotionalVolume = ta.sma(volume * close, notionalVolumeLookback)
+volumeDryUp =
+     hadPullback and
+     shortVolAvg < avgVol and
+     redVolDeclining
+
+liquidityWarning =
+     useLiquidityWarning and
+     (
+         useNotionalLiquidityFilter and avgNotionalVolume < minNotionalVolume or
+         not useNotionalLiquidityFilter and avgVol < minAvgVolume
+     )
+
+
+// ============================================================================
+// Candle quality
+// ============================================================================
+candleRange = high - low
+
+gapUpPct =
+     close[1] > 0.0
+         ? (open - close[1]) / close[1] * 100.0
+         : 0.0
+
+strongClose =
+     candleRange > 0.0
+         ? (close - low) / candleRange
+         : 0.5
+
+upperWickPct =
+     candleRange > 0.0
+         ? (high - math.max(open, close)) / candleRange * 100.0
+         : 0.0
+
+heavyRedNow =
+     close < open and
+     volRatio > heavyRedVolRatio and
+     candleRange > atr
+
+gapExhaustion =
+     gapUpPct >= gapExhaustionPct and
+     volRatio >= gapExhaustionVolRatio and
+     (
+         strongClose < 0.55 or
+         close < open or
+         upperWickPct > 35.0
+     ) and
+     (
+         extensionMidPct > extensionWarnPct or
+         rsi > 70.0
+     )
+
+distributionCount =
+     rollingSum(
+         close < open and volume > avgVol * 1.25 and close < close[1] ? 1.0 : 0.0,
+         distributionLookback
+     )
+
+
+// ============================================================================
+// Failed breakout detection
+// ============================================================================
+breakoutTriggered =
+     not na(prevResistance) and
+     close > prevResistance and
+     volume > avgVol * breakoutVolRatio
+
+var float activeBreakoutLevel = na
+var int activeBreakoutBar = na
+
+if breakoutTriggered
+    activeBreakoutLevel := prevResistance
+    activeBreakoutBar := bar_index
+
+barsSinceBreakout =
+     not na(activeBreakoutBar)
+         ? bar_index - activeBreakoutBar
+         : na
+
+failedBreakout =
+     not na(activeBreakoutLevel) and
+     not na(barsSinceBreakout) and
+     barsSinceBreakout > 0 and
+     barsSinceBreakout <= failedBreakoutBars and
+     close < activeBreakoutLevel and
+     volume > avgVol * failureVolRatio
+
+if failedBreakout or (not na(barsSinceBreakout) and barsSinceBreakout > failedBreakoutBars)
+    activeBreakoutLevel := na
+    activeBreakoutBar := na
+
+
+// ============================================================================
+// Risk / reward helper
+// ============================================================================
+swingLowStop = recentLow
+smaAtrStop = smaMid - atr * smaStopAtrBuffer
+atrMultipleStop = close - atr * atrStopMultiple
+
+rawSuggestedStop =
+     stopMode == "SMA 50 minus ATR buffer" ? smaAtrStop :
+     stopMode == "ATR multiple" ? atrMultipleStop :
+     swingLowStop
+
+suggestedStop =
+     not na(rawSuggestedStop) and rawSuggestedStop < close
+         ? rawSuggestedStop
+         : atrMultipleStop
+
+entryRisk = close - suggestedStop
+entryRiskPct = close > 0.0 and entryRisk > 0.0 ? entryRisk / close * 100.0 : na
+
+target2R = entryRisk > 0.0 ? close + entryRisk * targetRewardMultiple : na
+
+resistanceDistancePct =
+     not na(prevResistance) and prevResistance > close and close > 0.0
+         ? (prevResistance - close) / close * 100.0
+         : na
+
+rewardToResistance = not na(prevResistance) and prevResistance > close ? prevResistance - close : na
+rewardRiskToResistance =
+     not na(rewardToResistance) and entryRisk > 0.0
+         ? rewardToResistance / entryRisk
+         : na
+
+rewardRiskOk =
+     not useRewardRiskFilter or
+     na(rewardRiskToResistance) or
+     rewardRiskToResistance >= minRewardRisk
+
+entryFiltersOk = allFiltersOk and rewardRiskOk
+
+
+// ============================================================================
+// Step 3 retained + Step 4 blended: Trend Score 0-10
+// ============================================================================
+localTrendScore = 0.0
+
+// MA stack and alignment, max 3.0
+localTrendScore += close > emaPullback ? 0.50 : 0.0
+localTrendScore += emaPullback > smaMid ? 0.50 : 0.0
+localTrendScore += smaMid > smaTrend ? 0.60 : 0.0
+localTrendScore += smaTrend > smaSlow ? 0.60 : 0.0
+localTrendScore += close > smaSlow ? 0.40 : 0.0
+localTrendScore += maStackStrong ? 0.40 : 0.0
+
+// Slope quality, max 2.0
+localTrendScore += midSlopePct > 0.0 ? 0.50 : 0.0
+localTrendScore += slowSlopePct > 0.0 ? 0.40 : 0.0
+localTrendScore += midSlopeAtr > 0.50 ? 0.50 : midSlopeAtr > 0.20 ? 0.30 : 0.0
+localTrendScore += slowSlopeAtr > 0.25 ? 0.40 : slowSlopeAtr > 0.10 ? 0.20 : 0.0
+localTrendScore += midSlopePct > slowSlopePct ? 0.20 : 0.0
+
+// ADX / DMI, max 2.0
+localTrendScore += adx >= minAdxTrend ? 0.70 : adx >= 14.0 ? 0.35 : 0.0
+localTrendScore += plusDI > minusDI ? 0.70 : 0.0
+localTrendScore += adx > adx[1] ? 0.30 : 0.0
+localTrendScore += plusDI > plusDI[1] ? 0.30 : 0.0
+
+// 52-week / structure, max 3.0
+localTrendScore += position52 >= 70.0 ? 0.80 : position52 >= 50.0 ? 0.40 : 0.0
+localTrendScore += near52High ? 0.70 : 0.0
+localTrendScore += higherHigh ? 0.50 : 0.0
+localTrendScore += higherLow ? 0.50 : 0.0
+rsiPullbackLow = ta.lowest(rsi, pullbackLookback)
+close10High = ta.highest(close[1], 10)
+
+localTrendScore += close > close20High ? 0.50 : 0.0
+
+localTrendScore := clamp(localTrendScore, 0.0, 10.0)
+
+trendScore =
+     blendHtfIntoTrendScore and htfDataReady
+         ? clamp(localTrendScore * 0.80 + htfScore * 0.20, 0.0, 10.0)
+         : localTrendScore
+
+
+// ============================================================================
+// Step 3 retained: Momentum Score 0-10
+// ============================================================================
+momentumScore = 0.0
+
+// Relative strength, max 3.0
+momentumScore += combinedRelativeStrengthScore >= 8.0 ? 1.40 : combinedRelativeStrengthScore >= 6.5 ? 1.00 : combinedRelativeStrengthScore >= 5.0 ? 0.50 : 0.0
+momentumScore += rsRocShort > 0.0 ? 0.50 : 0.0
+momentumScore += rsRocMedium > 0.0 ? 0.50 : 0.0
+momentumScore += rsNewHigh ? 0.60 : 0.0
+
+// ROC momentum, max 2.5
+momentumScore += stockRocShort > 3.0 ? 0.60 : stockRocShort > 0.0 ? 0.30 : 0.0
+momentumScore += stockRocMedium > 8.0 ? 0.70 : stockRocMedium > 0.0 ? 0.35 : 0.0
+momentumScore += stockRocLong > 15.0 ? 0.50 : stockRocLong > 0.0 ? 0.25 : 0.0
+momentumScore += stockBeatsBenchmarkShort ? 0.35 : 0.0
+momentumScore += stockBeatsBenchmarkMedium ? 0.35 : 0.0
+
+// RSI momentum, max 1.5
+momentumScore += rsi >= 55.0 and rsi <= 70.0 ? 0.70 : rsi >= 50.0 and rsi <= 75.0 ? 0.40 : 0.0
+momentumScore += rsi > rsi[1] ? 0.30 : 0.0
+momentumScore += rsiPullbackLow > 40.0 ? 0.30 : 0.0
+momentumScore += rsiPullbackLow < 50.0 and rsi > 55.0 ? 0.20 : 0.0
+
+// Volume / accumulation, max 2.0
+momentumScore += greenBeatsRed ? 0.45 : 0.0
+momentumScore += obvRising ? 0.45 : 0.0
+momentumScore += close > open and volRatio >= 1.0 ? 0.40 : 0.0
+momentumScore += freshBreakout and volRatio >= breakoutVolRatio ? 0.40 : 0.0
+momentumScore += volumeDryUp ? 0.30 : 0.0
+
+// Candle/trigger momentum, max 1.0
+momentumScore += strongClose >= 0.70 ? 0.40 : strongClose >= 0.60 ? 0.20 : 0.0
+momentumScore += close > close[1] ? 0.30 : 0.0
+momentumScore += close > emaFast ? 0.30 : 0.0
+
+momentumScore := clamp(momentumScore, 0.0, 10.0)
+
+
+// ============================================================================
+// Step 3 retained: Setup Score 0-10
+// ============================================================================
+setupScore = 0.0
+
+// Pullback quality, max 3.0
+setupScore += hadPullback and notTooDeep ? 1.00 : 0.0
+setupScore += heldNearSupport ? 0.80 : 0.0
+setupScore += pullbackDepthPct >= minPullbackPct and pullbackDepthPct <= 10.0 ? 0.50 : 0.0
+setupScore += volumeDryUp ? 0.40 : 0.0
+setupScore += redVolDeclining ? 0.30 : 0.0
+
+// Reclaim / support behavior, max 2.0
+setupScore += close > emaPullback ? 0.50 : 0.0
+setupScore += close > smaMid ? 0.60 : 0.0
+setupScore += close > close[1] ? 0.40 : 0.0
+setupScore += strongClose >= 0.65 ? 0.50 : 0.0
+
+// Breakout / trigger quality, max 2.0
+setupScore += freshBreakout ? 0.80 : 0.0
+setupScore += close > close10High ? 0.40 : 0.0
+setupScore += volRatio >= 1.20 and close > open ? 0.40 : 0.0
+setupScore += close > emaFast ? 0.40 : 0.0
+
+// Entry comfort / extension, max 2.0
+setupScore += extensionMidPct <= extensionWarnPct ? 0.80 : 0.0
+setupScore += rewardRiskOk ? 0.50 : 0.0
+setupScore += rsi >= 50.0 and rsi <= 70.0 ? 0.50 : 0.0
+setupScore += atrPct <= atrWarnPct ? 0.20 : 0.0
+
+// Cleanliness, max 1.0
+setupScore += not heavyRedNow ? 0.30 : 0.0
+setupScore += distributionCount < 3.0 ? 0.30 : 0.0
+setupScore += not failedBreakout and not gapExhaustion ? 0.40 : 0.0
+
+setupScore := clamp(setupScore, 0.0, 10.0)
+
+
+// ============================================================================
+// Step 3 retained + Step 4 HTF risk: Risk Score 0-10
+// Higher = more dangerous
+// ============================================================================
+riskScore = 0.0
+
+riskScore += extensionMidPct > extensionWarnPct ? 1.0 : 0.0
+riskScore += extensionMidPct > extensionDangerPct ? 1.5 : 0.0
+riskScore += rsi > 75.0 ? 0.8 : 0.0
+riskScore += rsi > 80.0 ? 0.7 : 0.0
+riskScore += nearResistance and not freshBreakout ? 0.7 : 0.0
+riskScore += heavyRedNow ? 1.5 : 0.0
+riskScore += distributionCount >= 3.0 ? 1.5 : 0.0
+riskScore += failedBreakout ? 2.0 : 0.0
+riskScore += gapExhaustion ? 1.5 : 0.0
+riskScore += liquidityWarning ? 0.8 : 0.0
+riskScore += atrPct > atrWarnPct ? 0.7 : 0.0
+riskScore += atrPct > atrDangerPct ? 1.0 : 0.0
+riskScore += marketRiskOff ? 1.5 : marketRegime == MARKET_BEARISH ? 1.0 : marketRegime == MARKET_MIXED ? 0.4 : 0.0
+riskScore += relativeStrengthStatus == RS_WEAK ? 1.0 : relativeStrengthStatus == RS_NEUTRAL ? 0.4 : 0.0
+riskScore += useSectorBenchmark and sectorRelativeStrengthScore < sectorMinScore ? 0.7 : 0.0
+riskScore += htfStatus == HTF_WEAK ? 1.0 : htfStatus == HTF_NEUTRAL ? 0.3 : 0.0
+riskScore += close < smaMid and volume > avgVol * 1.20 ? 1.0 : 0.0
+
+riskScore := clamp(riskScore, 0.0, 10.0)
+
+riskControlScore = 10.0 - riskScore
+
+
+// ============================================================================
+// Step 4: Dual Score with HTF layer
+// ============================================================================
+dualScore =
+     clamp(
+         trendScore * 0.24 +
+         momentumScore * 0.24 +
+         setupScore * 0.18 +
+         riskControlScore * 0.10 +
+         marketScore * 0.09 +
+         combinedRelativeStrengthScore * 0.09 +
+         htfScore * 0.06,
+         0.0,
+         10.0
+     )
+
+
+// ============================================================================
+// Core danger conditions
+// ============================================================================
+blowoffTop =
+     trendOk and
+     extensionMidPct > extensionDangerPct and
+     rsi > 72.0 and
+     volRatio > 1.30 and
+     (upperWickPct > 35.0 or candleRange > atr * 1.50)
+
+distributionRisk =
+     distributionCount >= 3.0 or
+     heavyRedNow or
+     gapExhaustion or
+     close < smaMid and rsi < 45.0 and volume > avgVol * 1.20
+
+rsiCollapse = rsiPullbackLow < 35.0
+
+
+// ============================================================================
+// Step 4: Classification logic with HTF gate
+// ============================================================================
+primeCleanPullback =
+     trendScore >= 8.0 and
+     momentumScore >= 7.0 and
+     setupScore >= 8.0 and
+     riskScore <= 3.0 and
+     hadPullback and
+     notTooDeep and
+     heldNearSupport and
+     close > smaMid and
+     rsi >= 50.0 and
+     rsi <= 70.0 and
+     extensionMidPct <= extensionWarnPct and
+     entryFiltersOk and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout
+
+cleanBullPullback =
+     not primeCleanPullback and
+     trendScore >= 7.0 and
+     momentumScore >= 6.5 and
+     setupScore >= 7.5 and
+     riskScore <= 4.0 and
+     hadPullback and
+     notTooDeep and
+     heldNearSupport and
+     close > smaMid and
+     rsi >= 50.0 and
+     rsi <= 70.0 and
+     entryFiltersOk and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout
+
+freshBreakoutSignal =
+     trendScore >= 7.0 and
+     momentumScore >= 8.0 and
+     setupScore >= 6.5 and
+     riskScore <= 4.5 and
+     freshBreakout and
+     strongClose >= 0.65 and
+     entryFiltersOk and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout
+
+momentumContinuation =
+     trendScore >= 7.5 and
+     momentumScore >= 8.0 and
+     riskScore <= 5.0 and
+     not primeCleanPullback and
+     not cleanBullPullback and
+     not freshBreakoutSignal and
+     allFiltersOk and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout
+
+extendedMomentum =
+     trendScore >= 6.5 and
+     momentumScore >= 7.0 and
+     riskScore <= 6.0 and
+     not primeCleanPullback and
+     not cleanBullPullback and
+     not freshBreakoutSignal and
+     not momentumContinuation and
+     allFiltersOk and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout and
+     (
+         extensionMidPct > extensionWarnPct or
+         not hadPullback or
+         rsi > 68.0 or
+         freshBreakout
+     )
+
+overheatedMomentum =
+     trendScore >= 6.5 and
+     momentumScore >= 7.0 and
+     not primeCleanPullback and
+     not cleanBullPullback and
+     not freshBreakoutSignal and
+     not momentumContinuation and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout and
+     (
+         extensionMidPct > extensionDangerPct or
+         rsi > 75.0 or
+         extensionMidPct > extensionWarnPct and rsi > 70.0 or
+         riskScore >= 5.5
+     )
+
+filteredPullback =
+     not entryFiltersOk and
+     trendScore >= 7.0 and
+     setupScore >= 7.0 and
+     hadPullback and
+     notTooDeep and
+     heldNearSupport and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout
+
+filteredMomentum =
+     not entryFiltersOk and
+     trendScore >= 6.5 and
+     momentumScore >= 7.0 and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout
+
+trendRepair =
+     not primeCleanPullback and
+     not cleanBullPullback and
+     not freshBreakoutSignal and
+     not momentumContinuation and
+     not extendedMomentum and
+     not overheatedMomentum and
+     not filteredPullback and
+     not filteredMomentum and
+     not distributionRisk and
+     not blowoffTop and
+     not failedBreakout and
+     trendScore >= 4.5 and
+     trendScore < 7.0 and
+     momentumScore >= 4.5 and
+     close > smaSlow and
+     (
+         close > smaMid or
+         midSlopePct > 0.0 or
+         combinedRelativeStrengthScore >= 5.0
+     )
+
+classification =
+     blowoffTop ? CLASS_BLOWOFF_TOP :
+     failedBreakout ? CLASS_FAILED_BREAKOUT :
+     distributionRisk ? CLASS_DISTRIBUTION_RISK :
+     overheatedMomentum ? CLASS_OVERHEATED_MOMENTUM :
+     primeCleanPullback ? CLASS_PRIME_PULLBACK :
+     cleanBullPullback ? CLASS_CLEAN_PULLBACK :
+     freshBreakoutSignal ? CLASS_FRESH_BREAKOUT :
+     momentumContinuation ? CLASS_MOMENTUM_CONT :
+     extendedMomentum ? CLASS_EXTENDED_MOMENTUM :
+     filteredPullback ? CLASS_FILTERED_PULLBACK :
+     filteredMomentum ? CLASS_FILTERED_MOMENTUM :
+     trendRepair ? CLASS_TREND_REPAIR :
+     CLASS_NO_TRADE
+
+
+// ============================================================================
+// Pullback health
+// ============================================================================
+pullbackHealth =
+     heavyRedNow or rsiCollapse or hadPullback and not notTooDeep
+         ? PULLBACK_DANGEROUS
+         : hadPullback and notTooDeep and heldNearSupport and close > smaMid and not heavyRedNow
+             ? PULLBACK_HEALTHY
+             : PULLBACK_MIXED
+
+
+// ============================================================================
+// Action bias
+// ============================================================================
+filterProblem =
+     marketRiskOff ? "Market risk-off" :
+     not marketGateOk ? "Market failed" :
+     not sectorRelativeStrengthGateOk ? "Sector RS failed" :
+     not relativeStrengthGateOk ? "RS failed" :
+     not htfGateOk ? "HTF failed" :
+     not rewardRiskOk ? "R/R failed" :
+     "Filter failed"
+
+rrText =
+     na(rewardRiskToResistance)
+         ? "Open"
+         : str.tostring(rewardRiskToResistance, "#.0") + "R"
+
+buyableText =
+     rewardRiskOk ? "R/R ok" : "R/R below " + str.tostring(minRewardRisk, "#.0") + "R"
+
+actionBias =
+     classification == CLASS_PRIME_PULLBACK ? "Best buyable, " + buyableText :
+     classification == CLASS_CLEAN_PULLBACK ? "Buyable, " + buyableText :
+     classification == CLASS_FRESH_BREAKOUT ? "Breakout buy, " + buyableText :
+     classification == CLASS_MOMENTUM_CONT ? "Watch / trail / smaller size" :
+     classification == CLASS_EXTENDED_MOMENTUM ? "Do not chase, wait mini-pullback" :
+     classification == CLASS_OVERHEATED_MOMENTUM ? "Overheated, avoid chasing" :
+     classification == CLASS_FILTERED_PULLBACK ? "Good chart, " + filterProblem :
+     classification == CLASS_FILTERED_MOMENTUM ? "Momentum, " + filterProblem :
+     classification == CLASS_TREND_REPAIR ? "Improving, not ready" :
+     classification == CLASS_DISTRIBUTION_RISK ? "Avoid / exit risk" :
+     classification == CLASS_FAILED_BREAKOUT ? "Avoid" :
+     classification == CLASS_BLOWOFF_TOP ? "Avoid chasing" :
+     "No clear trade"
+
+
+// ============================================================================
+// Strategy orders
+// ============================================================================
+inDateRange =
+     not useDateFilter or
+     time >= startDate and time <= endDate
+
+primeEntry = tradePrimePullback and primeCleanPullback
+cleanEntry = tradeCleanPullback and cleanBullPullback
+breakoutEntry = tradeFreshBreakout and freshBreakoutSignal
+continuationEntry = tradeMomentumContinuation and momentumContinuation
+
+longEntrySignal =
+     inDateRange and
+     strategy.position_size == 0 and
+     entryRisk > 0.0 and
+     not na(target2R) and
+     (
+         primeEntry or
+         cleanEntry or
+         breakoutEntry or
+         continuationEntry
+     )
+
+entryReason =
+     primeEntry ? "Prime PB" :
+     cleanEntry ? "Clean PB" :
+     breakoutEntry ? "Breakout" :
+     continuationEntry ? "Momentum" :
+     "Long"
+
+entryOrderId =
+     primeEntry ? "Prime PB" :
+     cleanEntry ? "Clean PB" :
+     breakoutEntry ? "Breakout" :
+     continuationEntry ? "Momentum" :
+     ""
+
+var float tradeStop = na
+var float tradeTarget = na
+var float tradeEntryPrice = na
+var float tradeInitialRisk = na
+var float tradeHighSinceEntry = na
+var string tradeReason = ""
+var string activeEntryId = ""
+var int entryBarIndex = na
+
+if longEntrySignal
+    tradeStop := na
+    tradeTarget := na
+    tradeEntryPrice := na
+    tradeInitialRisk := na
+    tradeHighSinceEntry := na
+    tradeReason := entryReason
+    activeEntryId := entryOrderId
+    strategy.entry(entryOrderId, strategy.long, comment=entryReason)
+
+newLong =
+     strategy.position_size > 0 and
+     strategy.position_size[1] == 0
+
+if newLong
+    actualEntry = strategy.position_avg_price
+    actualSwingLowStop = recentLow
+    actualSmaAtrStop = smaMid - atr * smaStopAtrBuffer
+    actualAtrMultipleStop = actualEntry - atr * atrStopMultiple
+
+    actualRawStop =
+         stopMode == "SMA 50 minus ATR buffer" ? actualSmaAtrStop :
+         stopMode == "ATR multiple" ? actualAtrMultipleStop :
+         actualSwingLowStop
+
+    tradeStop :=
+         not na(actualRawStop) and actualRawStop < actualEntry
+             ? actualRawStop
+             : actualAtrMultipleStop
+
+    tradeEntryPrice := actualEntry
+    tradeInitialRisk := actualEntry - tradeStop
+    tradeTarget := tradeInitialRisk > 0.0 ? actualEntry + tradeInitialRisk * targetRewardMultiple : na
+    tradeHighSinceEntry := high
+    entryBarIndex := bar_index
+
+if strategy.position_size > 0
+    tradeHighSinceEntry := na(tradeHighSinceEntry) ? high : math.max(tradeHighSinceEntry, high)
+
+    breakevenTriggerPrice =
+         not na(tradeEntryPrice) and not na(tradeInitialRisk)
+             ? tradeEntryPrice + tradeInitialRisk * breakevenAtR
+             : na
+
+    if moveStopToBreakeven and not na(breakevenTriggerPrice) and high >= breakevenTriggerPrice
+        tradeStop := math.max(tradeStop, strategy.position_avg_price)
+
+    atrTrailStop =
+         not na(tradeHighSinceEntry)
+             ? tradeHighSinceEntry - atr * atrTrailMultiple
+             : na
+
+    if useAtrTrail and not na(atrTrailStop)
+        tradeStop := math.max(tradeStop, atrTrailStop)
+
+    strategy.exit("Prime PB exit", "Prime PB", stop=tradeStop, limit=tradeTarget)
+    strategy.exit("Clean PB exit", "Clean PB", stop=tradeStop, limit=tradeTarget)
+    strategy.exit("Breakout exit", "Breakout", stop=tradeStop, limit=tradeTarget)
+    strategy.exit("Momentum exit", "Momentum", stop=tradeStop, limit=tradeTarget)
+
+barsInTrade =
+     strategy.position_size > 0 and not na(entryBarIndex)
+         ? bar_index - entryBarIndex
+         : na
+
+dangerExit =
+     strategy.position_size > 0 and
+     exitOnDangerSignal and
+     (distributionRisk or failedBreakout or blowoffTop)
+
+marketRiskOffExit =
+     strategy.position_size > 0 and
+     exitOnMarketRiskOff and
+     marketRiskOff
+
+gapExhaustionExit =
+     strategy.position_size > 0 and
+     exitOnGapExhaustion and
+     gapExhaustion
+
+midSmaExit =
+     strategy.position_size > 0 and
+     exitOnCloseBelowMidSma and
+     close < smaMid
+
+maxBarsExit =
+     strategy.position_size > 0 and
+     useMaxBarsExit and
+     not na(barsInTrade) and
+     barsInTrade >= maxBarsInTrade
+
+dateExit =
+     strategy.position_size > 0 and
+     useDateFilter and
+     time > endDate
+
+if dangerExit
+    strategy.close(activeEntryId, comment="Danger exit")
+
+if marketRiskOffExit
+    strategy.close(activeEntryId, comment="Market risk-off exit")
+
+if gapExhaustionExit
+    strategy.close(activeEntryId, comment="Gap exhaustion exit")
+
+if midSmaExit
+    strategy.close(activeEntryId, comment="SMA 50 exit")
+
+if maxBarsExit
+    strategy.close(activeEntryId, comment="Time exit")
+
+if dateExit
+    strategy.close(activeEntryId, comment="Date exit")
+
+if strategy.position_size == 0 and not longEntrySignal
+    tradeStop := na
+    tradeTarget := na
+    tradeEntryPrice := na
+    tradeInitialRisk := na
+    tradeHighSinceEntry := na
+    tradeReason := ""
+    activeEntryId := ""
+    entryBarIndex := na
+
+
+// ============================================================================
+// Colors
+// ============================================================================
+classColor =
+     classification == CLASS_PRIME_PULLBACK ? color.new(color.lime, 0) :
+     classification == CLASS_CLEAN_PULLBACK ? color.new(color.green, 0) :
+     classification == CLASS_FRESH_BREAKOUT ? color.new(color.aqua, 0) :
+     classification == CLASS_MOMENTUM_CONT ? color.new(color.orange, 0) :
+     classification == CLASS_EXTENDED_MOMENTUM ? color.new(color.yellow, 0) :
+     classification == CLASS_OVERHEATED_MOMENTUM ? color.new(color.orange, 0) :
+     classification == CLASS_FILTERED_PULLBACK ? color.new(color.teal, 0) :
+     classification == CLASS_FILTERED_MOMENTUM ? color.new(color.orange, 35) :
+     classification == CLASS_TREND_REPAIR ? color.new(color.blue, 0) :
+     classification == CLASS_DISTRIBUTION_RISK ? color.new(color.red, 0) :
+     classification == CLASS_BLOWOFF_TOP ? color.new(color.purple, 0) :
+     classification == CLASS_FAILED_BREAKOUT ? color.new(color.maroon, 0) :
+     color.new(color.gray, 0)
+
+marketColor =
+     marketRegime == MARKET_BULLISH ? color.new(color.green, 0) :
+     marketRegime == MARKET_MIXED ? color.new(color.orange, 0) :
+     color.new(color.red, 0)
+
+rsColor =
+     relativeStrengthStatus == RS_STRONG ? color.new(color.green, 0) :
+     relativeStrengthStatus == RS_NEUTRAL ? color.new(color.orange, 0) :
+     color.new(color.red, 0)
+
+htfColor =
+     htfStatus == HTF_STRONG ? color.new(color.green, 0) :
+     htfStatus == HTF_NEUTRAL ? color.new(color.orange, 0) :
+     color.new(color.red, 0)
+
+riskColor =
+     riskScore <= 3.0 ? color.new(color.green, 0) :
+     riskScore <= 5.0 ? color.new(color.orange, 0) :
+     color.new(color.red, 0)
+
+
+// ============================================================================
+// Plots
+// ============================================================================
+plot(emaFast, "EMA 10", color=color.new(color.gray, 75), linewidth=1)
+plot(emaPullback, "EMA 20", color=color.new(color.gray, 45), linewidth=1)
+plot(smaMid, "SMA 50", color=color.black, linewidth=2)
+plot(smaTrend, "SMA 150", color=color.new(color.blue, 45), linewidth=2)
+plot(smaSlow, "SMA 200", color=color.blue, linewidth=3)
+
+plot(dualScore, "Dual score", display=display.data_window)
+plot(trendScore, "Trend score", display=display.data_window)
+plot(localTrendScore, "Local trend score", display=display.data_window)
+plot(htfScore, "HTF score", display=display.data_window)
+plot(momentumScore, "Momentum score", display=display.data_window)
+plot(setupScore, "Setup score", display=display.data_window)
+plot(riskScore, "Risk score", display=display.data_window)
+plot(marketScore, "Market score", display=display.data_window)
+plot(marketDistributionCount, "Market distribution count", display=display.data_window)
+plot(combinedRelativeStrengthScore, "Relative strength score", display=display.data_window)
+plot(relativeStrengthScore, "Benchmark relative strength score", display=display.data_window)
+plot(sectorRelativeStrengthScore, "Sector relative strength score", display=display.data_window)
+
+plot(extensionMidPct, "Extension above 50 SMA %", display=display.data_window)
+plot(volRatio, "Volume ratio", display=display.data_window)
+plot(pullbackDepthPct, "Pullback depth %", display=display.data_window)
+plot(atrPct, "ATR %", display=display.data_window)
+plot(position52, "52-week position %", display=display.data_window)
+
+plot(showMarketRsPlots ? rsLine : na, "RS Line", color=color.new(color.fuchsia, 0), linewidth=1)
+plot(showMarketRsPlots ? rsSma : na, "RS SMA", color=color.new(color.fuchsia, 60), linewidth=2)
+plot(showMarketRsPlots and useSectorBenchmark ? sectorRsLine : na, "Sector RS Line", color=color.new(color.aqua, 0), linewidth=1)
+plot(showMarketRsPlots and useSectorBenchmark ? sectorRsSma : na, "Sector RS SMA", color=color.new(color.aqua, 60), linewidth=2)
+
+plot(showRiskRewardPlots ? suggestedStop : na, "Suggested stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(showRiskRewardPlots ? target2R : na, "R target", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+plot(showRiskRewardPlots and strategy.position_size > 0 ? tradeStop : na, "Active trade stop", color=color.new(color.maroon, 0), linewidth=2, style=plot.style_linebr)
+plot(showRiskRewardPlots and strategy.position_size > 0 ? tradeTarget : na, "Active trade target", color=color.new(color.lime, 0), linewidth=2, style=plot.style_linebr)
+plot(entryRiskPct, "Entry risk %", display=display.data_window)
+plot(rewardRiskToResistance, "Reward/risk to resistance", display=display.data_window)
+
+plot(showDebugPlots ? adx : na, "ADX", display=display.data_window)
+plot(showDebugPlots ? plusDI : na, "+DI", display=display.data_window)
+plot(showDebugPlots ? minusDI : na, "-DI", display=display.data_window)
+plot(showDebugPlots ? obv : na, "OBV", display=display.data_window)
+plot(showDebugPlots ? htfClose : na, "HTF close", display=display.data_window)
+plot(showDebugPlots ? htfMidMa : na, "HTF mid MA", display=display.data_window)
+plot(showDebugPlots ? htfSlowMa : na, "HTF slow MA", display=display.data_window)
+
+
+// ============================================================================
+// Background
+// ============================================================================
+bgcolor(showBackground and primeCleanPullback ? color.new(color.lime, 88) : na)
+bgcolor(showBackground and cleanBullPullback ? color.new(color.green, 90) : na)
+bgcolor(showBackground and freshBreakoutSignal ? color.new(color.aqua, 90) : na)
+bgcolor(showBackground and (distributionRisk or failedBreakout or blowoffTop or overheatedMomentum) ? color.new(color.red, 90) : na)
+bgcolor(showBackground and marketRiskOff ? color.new(color.red, 94) : na)
+bgcolor(showBackground and (filteredPullback or filteredMomentum) ? color.new(color.yellow, 88) : na)
+bgcolor(showBackground and trendRepair ? color.new(color.blue, 92) : na)
+
+
+// ============================================================================
+// Last-bar label
+// ============================================================================
+var label lastLabel = na
+
+if barstate.islast and showLabel
+    if not na(lastLabel)
+        label.delete(lastLabel)
+
+    labelText =
+         "Engine: " + ENGINE_VERSION +
+         "\nDual: " + str.tostring(dualScore, "#.0") + "/10" +
+         "\nTrend: " + str.tostring(trendScore, "#.0") +
+         " | Mom: " + str.tostring(momentumScore, "#.0") +
+         "\nSetup: " + str.tostring(setupScore, "#.0") +
+         " | Risk: " + str.tostring(riskScore, "#.0") +
+         "\n" + classification +
+         "\nAction: " + actionBias +
+         "\nMarket: " + marketRegime + " " + str.tostring(marketScore, "#.0") +
+         "\nRS: " + relativeStrengthStatus + " " + str.tostring(combinedRelativeStrengthScore, "#.0") +
+         "\nSector RS: " + (useSectorBenchmark ? sectorRelativeStrengthStatus + " " + str.tostring(sectorRelativeStrengthScore, "#.0") : "Off") +
+         "\nHTF: " + htfStatus + " " + str.tostring(htfScore, "#.0") +
+         "\nPullback: " + pullbackHealth +
+         "\nStop: " + str.tostring(suggestedStop, format.mintick) +
+         " | " + str.tostring(targetRewardMultiple, "#.##") + "R: " + str.tostring(target2R, format.mintick) +
+         "\nR/R: " + rrText + " | " + buyableText +
+         "\nGap exhaust: " + str.tostring(gapExhaustion) +
+         " | Liq warn: " + str.tostring(liquidityWarning) +
+         "\nExt50: " + str.tostring(extensionMidPct, "#.0") + "%" +
+         " | ATR: " + str.tostring(atrPct, "#.0") + "%"
+
+    lastLabel := label.new(
+         bar_index,
+         high,
+         labelText,
+         style=label.style_label_down,
+         color=classColor,
+         textcolor=color.white,
+         size=size.normal
+     )
+
+
+// ============================================================================
+// Score table
+// ============================================================================
+var table scoreTable = table.new(position.top_right, 2, 64, border_width=1)
+
+if barstate.islast and showTable
+    table.cell(scoreTable, 0, 0, "Metric", bgcolor=color.black, text_color=color.white)
+    table.cell(scoreTable, 1, 0, "Value", bgcolor=color.black, text_color=color.white)
+
+    table.cell(scoreTable, 0, 1, "Dual score")
+    table.cell(scoreTable, 1, 1, str.tostring(dualScore, "#.0") + "/10", bgcolor=classColor, text_color=color.white)
+
+    table.cell(scoreTable, 0, 2, "Classification")
+    table.cell(scoreTable, 1, 2, classification, bgcolor=classColor, text_color=color.white)
+
+    table.cell(scoreTable, 0, 3, "Action")
+    table.cell(scoreTable, 1, 3, actionBias)
+
+    table.cell(scoreTable, 0, 4, "Trend")
+    table.cell(scoreTable, 1, 4, str.tostring(trendScore, "#.0") + "/10")
+
+    table.cell(scoreTable, 0, 5, "Local trend")
+    table.cell(scoreTable, 1, 5, str.tostring(localTrendScore, "#.0") + "/10")
+
+    table.cell(scoreTable, 0, 6, "HTF trend")
+    table.cell(scoreTable, 1, 6, htfStatus + " " + str.tostring(htfScore, "#.0"), bgcolor=htfColor, text_color=color.white)
+
+    table.cell(scoreTable, 0, 7, "Momentum")
+    table.cell(scoreTable, 1, 7, str.tostring(momentumScore, "#.0") + "/10")
+
+    table.cell(scoreTable, 0, 8, "Setup")
+    table.cell(scoreTable, 1, 8, str.tostring(setupScore, "#.0") + "/10")
+
+    table.cell(scoreTable, 0, 9, "Risk")
+    table.cell(scoreTable, 1, 9, str.tostring(riskScore, "#.0") + "/10", bgcolor=riskColor, text_color=color.white)
+
+    table.cell(scoreTable, 0, 10, "Market")
+    table.cell(scoreTable, 1, 10, marketRegime + " " + str.tostring(marketScore, "#.0"), bgcolor=marketColor, text_color=color.white)
+
+    table.cell(scoreTable, 0, 11, "Rel strength")
+    table.cell(scoreTable, 1, 11, relativeStrengthStatus + " " + str.tostring(combinedRelativeStrengthScore, "#.0"), bgcolor=rsColor, text_color=color.white)
+
+    table.cell(scoreTable, 0, 12, "Pullback")
+    table.cell(scoreTable, 1, 12, pullbackHealth)
+
+    table.cell(scoreTable, 0, 13, "ADX / +DI > -DI")
+    table.cell(scoreTable, 1, 13, str.tostring(adx, "#.0") + " / " + str.tostring(plusDI > minusDI))
+
+    table.cell(scoreTable, 0, 14, "Stock ROC " + str.tostring(rocShortLen))
+    table.cell(scoreTable, 1, 14, str.tostring(stockRocShort, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 15, "Bench ROC " + str.tostring(rocShortLen))
+    table.cell(scoreTable, 1, 15, str.tostring(benchmarkRocShort, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 16, "Stock ROC " + str.tostring(rocMediumLen))
+    table.cell(scoreTable, 1, 16, str.tostring(stockRocMedium, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 17, "Bench ROC " + str.tostring(rocMediumLen))
+    table.cell(scoreTable, 1, 17, str.tostring(benchmarkRocMedium, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 18, "RSI")
+    table.cell(scoreTable, 1, 18, str.tostring(rsi, "#.0"))
+
+    table.cell(scoreTable, 0, 19, "Vol ratio")
+    table.cell(scoreTable, 1, 19, str.tostring(volRatio, "#.00"))
+
+    table.cell(scoreTable, 0, 20, "Ext vs 50")
+    table.cell(scoreTable, 1, 20, str.tostring(extensionMidPct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 21, "ATR %")
+    table.cell(scoreTable, 1, 21, str.tostring(atrPct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 22, "52W position")
+    table.cell(scoreTable, 1, 22, str.tostring(position52, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 23, "PB depth")
+    table.cell(scoreTable, 1, 23, str.tostring(pullbackDepthPct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 24, "OBV rising")
+    table.cell(scoreTable, 1, 24, str.tostring(obvRising))
+
+    table.cell(scoreTable, 0, 25, "HTF ROC")
+    table.cell(scoreTable, 1, 25, str.tostring(htfRoc, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 26, "Stop mode")
+    table.cell(scoreTable, 1, 26, stopMode)
+
+    table.cell(scoreTable, 0, 27, "Suggested stop")
+    table.cell(scoreTable, 1, 27, str.tostring(suggestedStop, format.mintick))
+
+    table.cell(scoreTable, 0, 28, str.tostring(targetRewardMultiple, "#.##") + "R target")
+    table.cell(scoreTable, 1, 28, str.tostring(target2R, format.mintick))
+
+    table.cell(scoreTable, 0, 29, "Entry risk")
+    table.cell(scoreTable, 1, 29, str.tostring(entryRiskPct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 30, "Resistance dist")
+    table.cell(scoreTable, 1, 30, na(resistanceDistancePct) ? "Open" : str.tostring(resistanceDistancePct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 31, "Reward/risk")
+    table.cell(scoreTable, 1, 31, rrText + " / " + buyableText, bgcolor=rewardRiskOk ? color.new(color.green, 0) : color.new(color.red, 0), text_color=color.white)
+
+    table.cell(scoreTable, 0, 32, "Strategy position")
+    table.cell(scoreTable, 1, 32, strategy.position_size > 0 ? "Long" : "Flat")
+
+    table.cell(scoreTable, 0, 33, "Entry reason")
+    table.cell(scoreTable, 1, 33, tradeReason == "" ? "-" : tradeReason)
+
+    table.cell(scoreTable, 0, 34, "Avg entry")
+    table.cell(scoreTable, 1, 34, strategy.position_size > 0 ? str.tostring(strategy.position_avg_price, format.mintick) : "-")
+
+    table.cell(scoreTable, 0, 35, "Trade stop")
+    table.cell(scoreTable, 1, 35, strategy.position_size > 0 ? str.tostring(tradeStop, format.mintick) : "-")
+
+    table.cell(scoreTable, 0, 36, "Trade target")
+    table.cell(scoreTable, 1, 36, strategy.position_size > 0 ? str.tostring(tradeTarget, format.mintick) : "-")
+
+    table.cell(scoreTable, 0, 37, "Open P/L")
+    table.cell(scoreTable, 1, 37, strategy.position_size > 0 ? str.tostring(strategy.openprofit, "#.##") : "-")
+
+    table.cell(scoreTable, 0, 38, "Active entry ID")
+    table.cell(scoreTable, 1, 38, activeEntryId == "" ? "-" : activeEntryId)
+
+    table.cell(scoreTable, 0, 39, "Bars in trade")
+    table.cell(scoreTable, 1, 39, strategy.position_size > 0 and not na(barsInTrade) ? str.tostring(barsInTrade) : "-")
+
+    table.cell(scoreTable, 0, 40, "Max bars exit")
+    table.cell(scoreTable, 1, 40, useMaxBarsExit ? str.tostring(maxBarsInTrade) + " bars" : "Off")
+
+    table.cell(scoreTable, 0, 41, "Initial risk")
+    table.cell(scoreTable, 1, 41, strategy.position_size > 0 and not na(tradeInitialRisk) ? str.tostring(tradeInitialRisk, format.mintick) : "-")
+
+    table.cell(scoreTable, 0, 42, "High since entry")
+    table.cell(scoreTable, 1, 42, strategy.position_size > 0 and not na(tradeHighSinceEntry) ? str.tostring(tradeHighSinceEntry, format.mintick) : "-")
+
+    table.cell(scoreTable, 0, 43, "Breakeven")
+    table.cell(scoreTable, 1, 43, moveStopToBreakeven ? "At " + str.tostring(breakevenAtR, "#.##") + "R" : "Off")
+
+    table.cell(scoreTable, 0, 44, "ATR trail")
+    table.cell(scoreTable, 1, 44, useAtrTrail ? str.tostring(atrTrailMultiple, "#.##") + " ATR" : "Off")
+
+    closedTrades = strategy.closedtrades
+    winRate = closedTrades > 0 ? strategy.wintrades / closedTrades * 100.0 : na
+    profitFactor = strategy.grossloss != 0.0 ? strategy.grossprofit / math.abs(strategy.grossloss) : na
+
+    table.cell(scoreTable, 0, 45, "Closed trades")
+    table.cell(scoreTable, 1, 45, str.tostring(closedTrades))
+
+    table.cell(scoreTable, 0, 46, "Win rate")
+    table.cell(scoreTable, 1, 46, na(winRate) ? "-" : str.tostring(winRate, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 47, "Net profit")
+    table.cell(scoreTable, 1, 47, str.tostring(strategy.netprofit, "#.##"))
+
+    table.cell(scoreTable, 0, 48, "Profit factor")
+    table.cell(scoreTable, 1, 48, na(profitFactor) ? "-" : str.tostring(profitFactor, "#.00"))
+
+    table.cell(scoreTable, 0, 49, "Max drawdown")
+    table.cell(scoreTable, 1, 49, str.tostring(strategy.max_drawdown, "#.##"))
+
+    table.cell(scoreTable, 0, 50, "Market risk-off")
+    table.cell(scoreTable, 1, 50, str.tostring(marketRiskOff), bgcolor=marketRiskOff ? color.new(color.red, 0) : color.new(color.green, 0), text_color=color.white)
+
+    table.cell(scoreTable, 0, 51, "Market dist count")
+    table.cell(scoreTable, 1, 51, str.tostring(marketDistributionCount, "#"))
+
+    table.cell(scoreTable, 0, 52, "Sector RS")
+    table.cell(scoreTable, 1, 52, useSectorBenchmark ? sectorRelativeStrengthStatus + " " + str.tostring(sectorRelativeStrengthScore, "#.0") + "/10" : "Off")
+
+    table.cell(scoreTable, 0, 53, "Sector ROC " + str.tostring(rocShortLen))
+    table.cell(scoreTable, 1, 53, useSectorBenchmark ? str.tostring(sectorRocShort, "#.0") + "%" : "Off")
+
+    table.cell(scoreTable, 0, 54, "Risk-off exit")
+    table.cell(scoreTable, 1, 54, exitOnMarketRiskOff ? "On" : "Off")
+
+    table.cell(scoreTable, 0, 55, "Benchmark RS")
+    table.cell(scoreTable, 1, 55, str.tostring(relativeStrengthScore, "#.0") + "/10")
+
+    table.cell(scoreTable, 0, 56, "Combined RS")
+    table.cell(scoreTable, 1, 56, str.tostring(combinedRelativeStrengthScore, "#.0") + "/10")
+
+    table.cell(scoreTable, 0, 57, "Risk-off penalty")
+    table.cell(scoreTable, 1, 57, marketRiskOff ? str.tostring(marketRiskOffPenalty, "#.##") : "0")
+
+    table.cell(scoreTable, 0, 58, "Gap exhaustion")
+    table.cell(scoreTable, 1, 58, str.tostring(gapExhaustion), bgcolor=gapExhaustion ? color.new(color.red, 0) : color.new(color.green, 0), text_color=color.white)
+
+    table.cell(scoreTable, 0, 59, "Gap up %")
+    table.cell(scoreTable, 1, 59, str.tostring(gapUpPct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 60, "Liquidity warning")
+    table.cell(scoreTable, 1, 60, str.tostring(liquidityWarning), bgcolor=liquidityWarning ? color.new(color.orange, 0) : color.new(color.green, 0), text_color=color.white)
+
+    table.cell(scoreTable, 0, 61, "Avg volume")
+    table.cell(scoreTable, 1, 61, str.tostring(avgVol, "#"))
+
+    table.cell(scoreTable, 0, 62, "Gap exit")
+    table.cell(scoreTable, 1, 62, exitOnGapExhaustion ? "On" : "Off")
+
+    table.cell(scoreTable, 0, 63, "Engine version")
+    table.cell(scoreTable, 1, 63, ENGINE_VERSION)
+
+
+// ============================================================================
+// Alerts
+// ============================================================================
+alertcondition(primeCleanPullback, "Prime clean pullback", "Prime clean pullback detected.")
+alertcondition(cleanBullPullback, "Clean bull pullback", "Clean bull pullback detected.")
+alertcondition(freshBreakoutSignal, "Fresh breakout", "Fresh breakout detected.")
+alertcondition(momentumContinuation, "Momentum continuation", "Momentum continuation detected.")
+alertcondition(extendedMomentum, "Extended momentum", "Extended momentum detected.")
+alertcondition(overheatedMomentum, "Overheated momentum", "Overheated momentum detected.")
+alertcondition(filteredPullback, "Filtered pullback", "Pullback setup detected but market, relative strength, or HTF filter failed.")
+alertcondition(filteredMomentum, "Filtered momentum", "Momentum setup detected but market, relative strength, or HTF filter failed.")
+alertcondition(trendRepair, "Trend repair", "Trend repair detected.")
+alertcondition(distributionRisk, "Distribution risk", "Distribution risk detected.")
+alertcondition(gapExhaustion, "Gap exhaustion", "Gap exhaustion risk detected.")
+alertcondition(liquidityWarning, "Liquidity warning", "Average liquidity is below the configured threshold.")
+alertcondition(marketRiskOff, "Market risk-off", "Market risk-off regime detected.")
+alertcondition(useSectorBenchmark and not sectorRelativeStrengthGateOk, "Sector RS failed", "Sector relative strength filter failed.")
+alertcondition(failedBreakout, "Failed breakout", "Failed breakout detected.")
+alertcondition(blowoffTop, "Blowoff top", "Blowoff top risk detected.")

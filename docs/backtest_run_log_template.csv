@@ -1,0 +1,2 @@
+run_id,date_tested,symbol,timeframe,asset_group,date_range,setup_tested,scoring_mode,stop_mode,target_mode,trades,net_profit,profit_factor,max_drawdown,win_rate,avg_trade,avg_r,median_r,avg_bars,decision,notes
+v2.3-us-large-cap-AAPL-D-prime-pullback-balanced-structure-atr-r-multiple,,AAPL,D,US Large Cap,2020-latest,Prime Clean Pullback,Balanced,Structure + ATR,R Multiple,,,,,,,,,,Pending,

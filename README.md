@@ -6,14 +6,38 @@ The repository contains an indicator for live chart review and a matching strate
 
 ## Files
 
+- `dual_trend_momentum_indicator_v2_2.pine`
+  Current indicator version with v2.2 scoring modes, dashboard modes, stop/target modes, JSON alerts, and v2.1 correctness fixes.
+
+- `dual_trend_momentum_strategy_v2_2.pine`
+  Current strategy tester with v2.2 controls and setup-type-specific entry toggles.
+
+- `dual_trend_momentum_strategy_v2_3.pine`
+  Phase 3 strategy tester with market-regime split filters for backtest isolation.
+
+- `dual_trend_momentum_indicator_v2_1.pine`
+  Stable v2.1 correctness baseline.
+
+- `dual_trend_momentum_strategy_v2_1.pine`
+  Stable v2.1 strategy correctness baseline.
+
 - `Dual Trend + Momentum Swing Score v2.0`
-  Indicator version for chart reading, score dashboard, labels, background signals, plots, and alerts.
+  Original v2.0 indicator.
 
 - `Dual Trend Momentum Strategy Tester v2.0`
-  Strategy/backtest companion that reuses the indicator signal engine and places test trades.
+  Original v2.0 strategy tester.
 
 - `design.txt`
   Design notes and implementation roadmap.
+
+- `docs/backtest_methodology.md`
+  Phase 3 testing procedure for setup isolation, scoring mode comparison, market regime splits, and pass/fail criteria.
+
+- `docs/backtest_results_v2_3.md`
+  Phase 3 results log template.
+
+- `docs/backtest_run_log_template.csv`
+  Spreadsheet-friendly run log template.
 
 ## Indicator
 
@@ -62,17 +86,25 @@ It displays:
 
 Stop modes:
 
-- Recent swing low
-- SMA 50 minus ATR buffer
-- ATR multiple
+- ATR
+- SMA50
+- Structure
+- Structure + ATR
+
+Target modes:
+
+- R Multiple
+- Prior High
+- Measured Move
+- ATR Target
 
 The scripts estimate:
 
 - Suggested stop
-- Target R multiple
+- Target
 - Entry risk %
 - Resistance distance
-- Reward/risk to resistance
+- Reward/risk to target
 - Gap exhaustion
 - Liquidity warning
 
@@ -94,7 +126,7 @@ Market risk-off uses:
 
 ## Strategy Tester
 
-Use `Dual Trend Momentum Strategy Tester v2.0` in TradingView Strategy Tester.
+Use `dual_trend_momentum_strategy_v2_3.pine` in TradingView Strategy Tester for Phase 3 regime-split testing. Use `dual_trend_momentum_strategy_v2_2.pine` as the stable v2.2 baseline.
 
 Entry toggles:
 
@@ -155,10 +187,14 @@ Both scripts expose alert conditions for:
 ## TradingView Workflow
 
 1. Open a chart.
-2. Paste or import the indicator script.
+2. Paste or import the current indicator script.
 3. Review the score table and last-bar label.
 4. Use the strategy tester script separately to compare entry and exit rules.
 5. Compile both scripts after changes; Pine warnings often point to history-dependent calculations that need to be assigned before use.
+
+## Backtesting Workflow
+
+Use `docs/backtest_methodology.md` for Phase 3 tests. Record results in `docs/backtest_results_v2_3.md` or `docs/backtest_run_log_template.csv`.
 
 ## Notes
 
