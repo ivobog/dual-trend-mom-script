@@ -30,7 +30,15 @@ import ivobog/DualTrendMomentumEngine/2 as engine
 
 Library version 2 provides shared version/classification helpers, status constants, score clamping, and pure helper exports such as ROC, slope, rolling sum, percent distance, and distribution-bar helpers.
 
-The v3 architecture adds `src/dual_trend_momentum_engine.pine` as a library anchor. The intended end state is:
+The next engine version is prepared in `src/dual_trend_momentum_engine.pine` and should be published as library version 3:
+
+```pine
+import ivobog/DualTrendMomentumEngine/3 as engine
+```
+
+Library version 3 adds exported scoring and classification modules for relative strength, HTF trend, local trend, momentum, setup, risk, dual score composition, setup classification, pullback health, filter problem text, and action bias.
+
+The v3 architecture end state is now:
 
 ```text
 Indicator imports engine library.
@@ -40,22 +48,20 @@ Indicator owns visuals and alerts.
 Strategy owns entries, exits, and backtest controls.
 ```
 
-## Why The Engine Is Not Fully Imported Yet
+## Current Boundary
 
-The published library currently does not export the full signal engine. Removing the remaining local calculation block before those exports exist would leave the indicator and strategy without the variables used by dashboards, alerts, plots, entries, exits, and classification logic.
+The engine owns pure scoring and classification decisions. The indicator and strategy still own data collection, especially `request.security` calls, plus chart rendering, alerts, strategy entries, exits, and dashboards.
 
 ## Migration Plan
 
-1. Keep v3 scripts compiling with library `/2` plus the local calculation block.
-2. Move score modules into exported library functions.
-3. Publish another library version.
-4. Remove local score/classification calculation only after imported replacements compile.
-5. Keep visual/dashboard code in the indicator.
-6. Keep order/execution code in the strategy.
+1. Publish `src/dual_trend_momentum_engine.pine` as library version `/3`.
+2. Compile the v3.2 indicator and strategy with `import ivobog/DualTrendMomentumEngine/3 as engine`.
+3. Keep visual/dashboard code in the indicator.
+4. Keep order/execution code in the strategy.
 
-## Drift Control Until Full Library Extraction
+## Drift Control
 
-When changing shared signal logic before the full library import is complete:
+When changing shared signal logic:
 
 ```text
 Update indicator and strategy in the same commit.

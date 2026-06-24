@@ -9,13 +9,13 @@ Current v3 files live in `src/`. Older root-level scripts are kept as stable bas
 ## Files
 
 - `src/dual_trend_momentum_indicator_v3.pine`
-  Current v3.1 indicator for chart review, dashboards, labels, plots, and alerts.
+  Current v3.2 indicator for chart review, dashboards, labels, plots, and alerts.
 
 - `src/dual_trend_momentum_strategy_v3.pine`
-  Current v3.1 strategy tester with setup toggles, exits, scoring modes, stop/target modes, and market-regime split filters.
+  Current v3.2 strategy tester with setup toggles, exits, scoring modes, stop/target modes, and market-regime split filters.
 
 - `src/dual_trend_momentum_engine.pine`
-  Published Pine library source. Current script import path: `import ivobog/DualTrendMomentumEngine/2 as engine`.
+  Pine library source for the next published engine version. Future script import path after publishing: `import ivobog/DualTrendMomentumEngine/3 as engine`.
 
 - `CHANGELOG.md`
   Version history and release notes.
@@ -24,7 +24,7 @@ Current v3 files live in `src/`. Older root-level scripts are kept as stable bas
   v3 architecture notes and engine extraction plan.
 
 - `docs/engine_contract.md`
-  Shared-engine boundary and drift-control rules while indicator and strategy still keep the larger signal calculation block local.
+  Shared-engine boundary and drift-control rules for the library-backed scoring/classification modules.
 
 - `docs/usage_workflow.md`
   Practical chart-review and strategy-testing workflow.

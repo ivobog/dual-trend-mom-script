@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.2.0
+
+- Prepared the next engine library version for `ivobog/DualTrendMomentumEngine/3`.
+- Moved larger pure score/classification modules into exported engine functions:
+  - Relative strength scoring
+  - HTF scoring
+  - Local/blended trend scoring
+  - Momentum, setup, risk, and dual scoring
+  - Blowoff/distribution danger helpers
+  - Setup classification
+  - Pullback health, filter problem text, and action bias
+- Updated v3 indicator and strategy to call the future `/3` engine API.
+- Kept `request.security`, visual/dashboard/alert rendering, and strategy order execution local.
+
 ## v3.1.0
 
 - Switched v3 indicator and strategy to `ivobog/DualTrendMomentumEngine/2`.

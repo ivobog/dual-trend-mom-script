@@ -6,7 +6,13 @@ The v3 indicator and strategy import:
 import ivobog/DualTrendMomentumEngine/2 as engine
 ```
 
-Until the Pine library extraction is complete, the indicator and strategy still contain a local copy of the larger signal calculation engine.
+The v3.2 indicator and strategy are prepared to import the next engine library version after publishing:
+
+```pine
+import ivobog/DualTrendMomentumEngine/3 as engine
+```
+
+Version `/3` owns the larger pure scoring and classification modules. The scripts keep data collection, rendering, alerts, and strategy order execution local.
 
 ## Shared Logic
 
@@ -25,8 +31,8 @@ Constants
 Helper functions
 Core indicators
 Market regime
-Relative strength
-HTF trend
+Relative strength data collection
+HTF trend data collection
 Trend geometry
 Pullback geometry
 Resistance and breakout geometry
@@ -34,15 +40,7 @@ Volume quality
 Candle quality
 Failed breakout detection
 Risk/reward helper
-Trend score
-Momentum score
-Setup score
-Risk score
-Dual score
-Danger conditions
-Classification logic
-Pullback health
-Action bias
+Engine score/classification calls
 Colors
 Plots
 Background
@@ -82,13 +80,14 @@ Both scripts compile in TradingView
 CHANGELOG.md records the behavior change
 ```
 
-## Library Extraction Target
+## Library Extraction Boundary
 
-Imported from library version 2:
+Imported from library version 3:
 
 ```text
 engineVersion()
 classification constants for primary setup/risk states
+remaining classification/status constants
 clampScore()
 rocPct()
 slopePct()
@@ -96,19 +95,24 @@ slopeAtr()
 pctDistance()
 rollingSum()
 distributionBar()
-remaining classification/status constants
-```
-
-Move score modules once the helper function signatures are stable:
-
-```text
-Trend score
+relativeStrengthScore()
+combinedRelativeStrengthScore()
+relativeStrengthStatus()
+htfScore()
+htfStatus()
+localTrendScore()
+blendedTrendScore()
 Momentum score
-Setup score
-Risk score
-Dual score
-Classification
-Action bias
+momentumScore()
+setupScore()
+riskScore()
+dualScore()
+blowoffTop()
+distributionRisk()
+classifySetup()
+pullbackHealthStatus()
+filterProblemText()
+actionBiasText()
 ```
 
 Keep stateful strategy order handling outside the engine.

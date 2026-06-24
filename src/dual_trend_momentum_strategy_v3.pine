@@ -1,8 +1,8 @@
 //@version=6
-import ivobog/DualTrendMomentumEngine/2 as engine
+import ivobog/DualTrendMomentumEngine/3 as engine
 
 strategy(
-     "Dual Trend Momentum Strategy Tester v3.1",
+     "Dual Trend Momentum Strategy Tester v3.2",
      overlay=true,
      max_labels_count=500,
      initial_capital=100000,
@@ -16,28 +16,22 @@ strategy(
 )
 
 // ============================================================================
-// Dual Trend Momentum Strategy Tester v3.1
+// Dual Trend Momentum Strategy Tester v3.2
 // Backtest companion for the indicator.
 //
-// v3.1 imports ivobog/DualTrendMomentumEngine/2 for shared constants,
-// score clamping, and pure helper functions while the larger signal
-// calculation block remains local.
+// v3.2 imports ivobog/DualTrendMomentumEngine/3 for shared constants,
+// pure helpers, score modules, and setup classification logic.
 //
-// This script keeps the Step 3 score engine:
-// - Trend Score 0-10
-// - Momentum Score 0-10
-// - Setup Score 0-10
-// - Risk Score 0-10
-// - Market Score 0-10
-// - Relative Strength Score 0-10
-// - Dual Score 0-10
+// The script keeps data collection, chart rendering, alerts, and strategy order
+// execution local. Score composition and setup classification now live in the
+// engine library.
 // ============================================================================
 
 
 // ============================================================================
 // SHARED ENGINE BLOCK START
-// Keep aligned with src/dual_trend_momentum_indicator_v3.pine until the Pine
-// library extraction is complete. See docs/engine_contract.md.
+// Keep aligned with src/dual_trend_momentum_indicator_v3.pine after the Pine
+// library extraction. See docs/engine_contract.md.
 // Strategy-only declarations, inputs, orders, exits, and dashboard rows may
 // intentionally differ.
 // ============================================================================
@@ -386,43 +380,31 @@ stockBeatsSectorShort = stockRocShort > sectorRocShort
 stockBeatsSectorMedium = stockRocMedium > sectorRocMedium
 stockBeatsSectorLong = stockRocLong > sectorRocLong
 
-sectorRelativeStrengthScore = 0.0
-sectorRelativeStrengthScore += not na(sectorRsLine) and not na(sectorRsSma) and sectorRsLine > sectorRsSma ? 2.0 : 0.0
-sectorRelativeStrengthScore += sectorRsRocShort > 0.0 ? 1.5 : 0.0
-sectorRelativeStrengthScore += sectorRsRocMedium > 0.0 ? 1.5 : 0.0
-sectorRelativeStrengthScore += sectorRsRocLong > 0.0 ? 1.0 : 0.0
-sectorRelativeStrengthScore += stockBeatsSectorShort ? 1.5 : 0.0
-sectorRelativeStrengthScore += stockBeatsSectorMedium ? 1.5 : 0.0
-sectorRelativeStrengthScore += stockBeatsSectorLong ? 0.5 : 0.0
-sectorRelativeStrengthScore += sectorRsNewHigh ? 0.5 : 0.0
-sectorRelativeStrengthScore := engine.clampScore(sectorRelativeStrengthScore)
+sectorRelativeStrengthScore = engine.relativeStrengthScore(
+     not na(sectorRsLine) and not na(sectorRsSma) and sectorRsLine > sectorRsSma,
+     sectorRsRocShort,
+     sectorRsRocMedium,
+     sectorRsRocLong,
+     stockBeatsSectorShort,
+     stockBeatsSectorMedium,
+     stockBeatsSectorLong,
+     sectorRsNewHigh
+)
 
-relativeStrengthScore = 0.0
-relativeStrengthScore += not na(rsLine) and not na(rsSma) and rsLine > rsSma ? 2.0 : 0.0
-relativeStrengthScore += rsRocShort > 0.0 ? 1.5 : 0.0
-relativeStrengthScore += rsRocMedium > 0.0 ? 1.5 : 0.0
-relativeStrengthScore += rsRocLong > 0.0 ? 1.0 : 0.0
-relativeStrengthScore += stockBeatsBenchmarkShort ? 1.5 : 0.0
-relativeStrengthScore += stockBeatsBenchmarkMedium ? 1.5 : 0.0
-relativeStrengthScore += stockBeatsBenchmarkLong ? 0.5 : 0.0
-relativeStrengthScore += rsNewHigh ? 0.5 : 0.0
-relativeStrengthScore := engine.clampScore(relativeStrengthScore)
+relativeStrengthScore = engine.relativeStrengthScore(
+     not na(rsLine) and not na(rsSma) and rsLine > rsSma,
+     rsRocShort,
+     rsRocMedium,
+     rsRocLong,
+     stockBeatsBenchmarkShort,
+     stockBeatsBenchmarkMedium,
+     stockBeatsBenchmarkLong,
+     rsNewHigh
+)
 
-combinedRelativeStrengthScore =
-     useSectorBenchmark
-         ? engine.clampScore(relativeStrengthScore * 0.70 + sectorRelativeStrengthScore * 0.30)
-         : relativeStrengthScore
-
-relativeStrengthStatus =
-     combinedRelativeStrengthScore >= 7.0 ? RS_STRONG :
-     combinedRelativeStrengthScore >= 4.5 ? RS_NEUTRAL :
-     RS_WEAK
-
-sectorRelativeStrengthStatus =
-     sectorRelativeStrengthScore >= 7.0 ? RS_STRONG :
-     sectorRelativeStrengthScore >= 4.5 ? RS_NEUTRAL :
-     RS_WEAK
-
+combinedRelativeStrengthScore = engine.combinedRelativeStrengthScore(relativeStrengthScore, sectorRelativeStrengthScore, useSectorBenchmark)
+relativeStrengthStatus = engine.relativeStrengthStatus(combinedRelativeStrengthScore)
+sectorRelativeStrengthStatus = engine.relativeStrengthStatus(sectorRelativeStrengthScore)
 sectorRelativeStrengthGateOk =
      not useSectorBenchmark or
      sectorRelativeStrengthScore >= sectorMinScore
@@ -512,22 +494,20 @@ htfStackBasic =
      htfClose > htfMidMa and
      htfMidMa > htfSlowMa
 
-htfScore = 0.0
-htfScore += htfDataReady and htfClose > htfSlowMa ? 2.00 : 0.0
-htfScore += htfDataReady and htfClose > htfMidMa ? 1.50 : 0.0
-htfScore += htfDataReady and htfFastMa > htfMidMa ? 1.25 : 0.0
-htfScore += htfDataReady and htfMidMa > htfSlowMa ? 1.50 : 0.0
-htfScore += htfMidSlopePct > 0.0 ? 1.25 : 0.0
-htfScore += htfSlowSlopePct > 0.0 ? 1.00 : 0.0
-htfScore += htfRoc > 0.0 ? 1.00 : 0.0
-htfScore += htfStackStrong ? 0.50 : htfStackBasic ? 0.25 : 0.0
-htfScore := engine.clampScore(htfScore)
+htfScore = engine.htfScore(
+     htfDataReady,
+     htfClose > htfSlowMa,
+     htfClose > htfMidMa,
+     htfFastMa > htfMidMa,
+     htfMidMa > htfSlowMa,
+     htfMidSlopePct,
+     htfSlowSlopePct,
+     htfRoc,
+     htfStackStrong,
+     htfStackBasic
+)
 
-htfStatus =
-     htfScore >= 7.0 ? HTF_STRONG :
-     htfScore >= 4.5 ? HTF_NEUTRAL :
-     HTF_WEAK
-
+htfStatus = engine.htfStatus(htfScore)
 htfGateOk =
      not (useHtfTrendFilter or scoringMode == "Conservative") or
      scoringMode == "Early Rocket" or
@@ -846,365 +826,168 @@ entryFiltersOk = allFiltersOk and rewardRiskOk
 
 
 // ============================================================================
-// Step 3 retained + Step 4 blended: Trend Score 0-10
+// Engine score/classification modules
 // ============================================================================
-localTrendScore = 0.0
-
-// MA stack and alignment, max 3.0
-localTrendScore += close > emaPullback ? 0.50 : 0.0
-localTrendScore += emaPullback > smaMid ? 0.50 : 0.0
-localTrendScore += smaMid > smaTrend ? 0.60 : 0.0
-localTrendScore += smaTrend > smaSlow ? 0.60 : 0.0
-localTrendScore += close > smaSlow ? 0.40 : 0.0
-localTrendScore += maStackStrong ? 0.40 : 0.0
-
-// Slope quality, max 2.0
-localTrendScore += midSlopePct > 0.0 ? 0.50 : 0.0
-localTrendScore += slowSlopePct > 0.0 ? 0.40 : 0.0
-localTrendScore += midSlopeAtr > 0.50 ? 0.50 : midSlopeAtr > 0.20 ? 0.30 : 0.0
-localTrendScore += slowSlopeAtr > 0.25 ? 0.40 : slowSlopeAtr > 0.10 ? 0.20 : 0.0
-localTrendScore += midSlopePct > slowSlopePct ? 0.20 : 0.0
-
-// ADX / DMI, max 2.0
-localTrendScore += adx >= minAdxTrend ? 0.70 : adx >= 14.0 ? 0.35 : 0.0
-localTrendScore += plusDI > minusDI ? 0.70 : 0.0
-localTrendScore += adx > adx[1] ? 0.30 : 0.0
-localTrendScore += plusDI > plusDI[1] ? 0.30 : 0.0
-
-// 52-week / structure, max 3.0
-localTrendScore += position52 >= 70.0 ? 0.80 : position52 >= 50.0 ? 0.40 : 0.0
-localTrendScore += near52High ? 0.70 : 0.0
-localTrendScore += higherHigh ? 0.50 : 0.0
-localTrendScore += higherLow ? 0.50 : 0.0
 rsiPullbackLow = ta.lowest(rsi, pullbackLookback)
 close10High = ta.highest(close[1], 10)
 
-localTrendScore += close > close20High ? 0.50 : 0.0
+localTrendScore = engine.localTrendScore(
+     close > emaPullback,
+     emaPullback > smaMid,
+     smaMid > smaTrend,
+     smaTrend > smaSlow,
+     close > smaSlow,
+     maStackStrong,
+     midSlopePct,
+     slowSlopePct,
+     midSlopeAtr,
+     slowSlopeAtr,
+     adx,
+     minAdxTrend,
+     plusDI > minusDI,
+     adx > adx[1],
+     plusDI > plusDI[1],
+     position52,
+     near52High,
+     higherHigh,
+     higherLow,
+     close > close20High
+)
 
-localTrendScore := engine.clampScore(localTrendScore)
+trendScore = engine.blendedTrendScore(localTrendScore, htfScore, blendHtfIntoTrendScore, htfDataReady)
 
-trendScore =
-     blendHtfIntoTrendScore and htfDataReady
-         ? engine.clampScore(localTrendScore * 0.80 + htfScore * 0.20)
-         : localTrendScore
+momentumScore = engine.momentumScore(
+     combinedRelativeStrengthScore,
+     rsRocShort,
+     rsRocMedium,
+     rsNewHigh,
+     stockRocShort,
+     stockRocMedium,
+     stockRocLong,
+     stockBeatsBenchmarkShort,
+     stockBeatsBenchmarkMedium,
+     rsi,
+     rsi > rsi[1],
+     rsiPullbackLow,
+     greenBeatsRed,
+     obvRising,
+     close > open and volRatio >= 1.0,
+     freshBreakout and volRatio >= breakoutVolRatio,
+     volumeDryUp,
+     strongClose,
+     close > close[1],
+     close > emaFast
+)
 
+setupScore = engine.setupScore(
+     hadPullback,
+     notTooDeep,
+     heldNearSupport,
+     pullbackDepthPct,
+     minPullbackPct,
+     volumeDryUp,
+     redVolDeclining,
+     close > emaPullback,
+     close > smaMid,
+     close > close[1],
+     strongClose,
+     freshBreakout,
+     close > close10High,
+     volRatio >= 1.20 and close > open,
+     close > emaFast,
+     extensionMidPct,
+     extensionWarnPct,
+     rewardRiskOk,
+     rsi,
+     atrPct,
+     atrWarnPct,
+     heavyRedNow,
+     distributionCount,
+     failedBreakout,
+     gapExhaustion
+)
 
-// ============================================================================
-// Step 3 retained: Momentum Score 0-10
-// ============================================================================
-momentumScore = 0.0
+heavyMidMaBreak = close < smaMid and volume > avgVol * 1.20
 
-// Relative strength, max 3.0
-momentumScore += combinedRelativeStrengthScore >= 8.0 ? 1.40 : combinedRelativeStrengthScore >= 6.5 ? 1.00 : combinedRelativeStrengthScore >= 5.0 ? 0.50 : 0.0
-momentumScore += rsRocShort > 0.0 ? 0.50 : 0.0
-momentumScore += rsRocMedium > 0.0 ? 0.50 : 0.0
-momentumScore += rsNewHigh ? 0.60 : 0.0
-
-// ROC momentum, max 2.5
-momentumScore += stockRocShort > 3.0 ? 0.60 : stockRocShort > 0.0 ? 0.30 : 0.0
-momentumScore += stockRocMedium > 8.0 ? 0.70 : stockRocMedium > 0.0 ? 0.35 : 0.0
-momentumScore += stockRocLong > 15.0 ? 0.50 : stockRocLong > 0.0 ? 0.25 : 0.0
-momentumScore += stockBeatsBenchmarkShort ? 0.35 : 0.0
-momentumScore += stockBeatsBenchmarkMedium ? 0.35 : 0.0
-
-// RSI momentum, max 1.5
-momentumScore += rsi >= 55.0 and rsi <= 70.0 ? 0.70 : rsi >= 50.0 and rsi <= 75.0 ? 0.40 : 0.0
-momentumScore += rsi > rsi[1] ? 0.30 : 0.0
-momentumScore += rsiPullbackLow > 40.0 ? 0.30 : 0.0
-momentumScore += rsiPullbackLow < 50.0 and rsi > 55.0 ? 0.20 : 0.0
-
-// Volume / accumulation, max 2.0
-momentumScore += greenBeatsRed ? 0.45 : 0.0
-momentumScore += obvRising ? 0.45 : 0.0
-momentumScore += close > open and volRatio >= 1.0 ? 0.40 : 0.0
-momentumScore += freshBreakout and volRatio >= breakoutVolRatio ? 0.40 : 0.0
-momentumScore += volumeDryUp ? 0.30 : 0.0
-
-// Candle/trigger momentum, max 1.0
-momentumScore += strongClose >= 0.70 ? 0.40 : strongClose >= 0.60 ? 0.20 : 0.0
-momentumScore += close > close[1] ? 0.30 : 0.0
-momentumScore += close > emaFast ? 0.30 : 0.0
-
-momentumScore := engine.clampScore(momentumScore)
-
-
-// ============================================================================
-// Step 3 retained: Setup Score 0-10
-// ============================================================================
-setupScore = 0.0
-
-// Pullback quality, max 3.0
-setupScore += hadPullback and notTooDeep ? 1.00 : 0.0
-setupScore += heldNearSupport ? 0.80 : 0.0
-setupScore += pullbackDepthPct >= minPullbackPct and pullbackDepthPct <= 10.0 ? 0.50 : 0.0
-setupScore += volumeDryUp ? 0.40 : 0.0
-setupScore += redVolDeclining ? 0.30 : 0.0
-
-// Reclaim / support behavior, max 2.0
-setupScore += close > emaPullback ? 0.50 : 0.0
-setupScore += close > smaMid ? 0.60 : 0.0
-setupScore += close > close[1] ? 0.40 : 0.0
-setupScore += strongClose >= 0.65 ? 0.50 : 0.0
-
-// Breakout / trigger quality, max 2.0
-setupScore += freshBreakout ? 0.80 : 0.0
-setupScore += close > close10High ? 0.40 : 0.0
-setupScore += volRatio >= 1.20 and close > open ? 0.40 : 0.0
-setupScore += close > emaFast ? 0.40 : 0.0
-
-// Entry comfort / extension, max 2.0
-setupScore += extensionMidPct <= extensionWarnPct ? 0.80 : 0.0
-setupScore += rewardRiskOk ? 0.50 : 0.0
-setupScore += rsi >= 50.0 and rsi <= 70.0 ? 0.50 : 0.0
-setupScore += atrPct <= atrWarnPct ? 0.20 : 0.0
-
-// Cleanliness, max 1.0
-setupScore += not heavyRedNow ? 0.30 : 0.0
-setupScore += distributionCount < 3.0 ? 0.30 : 0.0
-setupScore += not failedBreakout and not gapExhaustion ? 0.40 : 0.0
-
-setupScore := engine.clampScore(setupScore)
-
-
-// ============================================================================
-// Step 3 retained + Step 4 HTF risk: Risk Score 0-10
-// Higher = more dangerous
-// ============================================================================
-riskScore = 0.0
-
-riskScore += extensionMidPct > extensionWarnPct ? 1.0 : 0.0
-riskScore += extensionMidPct > extensionDangerPct ? 1.5 : 0.0
-riskScore += rsi > 75.0 ? 0.8 : 0.0
-riskScore += rsi > 80.0 ? 0.7 : 0.0
-riskScore += nearResistance and not freshBreakout ? 0.7 : 0.0
-riskScore += heavyRedNow ? 1.5 : 0.0
-riskScore += distributionCount >= 3.0 ? 1.5 : 0.0
-riskScore += failedBreakout ? 2.0 : 0.0
-riskScore += gapExhaustion ? 1.5 : 0.0
-riskScore += liquidityWarning ? 0.8 : 0.0
-riskScore += atrPct > atrWarnPct ? 0.7 : 0.0
-riskScore += atrPct > atrDangerPct ? 1.0 : 0.0
-riskScore += marketRiskOff ? 1.5 : marketRegime == MARKET_BEARISH ? 1.0 : marketRegime == MARKET_MIXED ? 0.4 : 0.0
-riskScore += relativeStrengthStatus == RS_WEAK ? 1.0 : relativeStrengthStatus == RS_NEUTRAL ? 0.4 : 0.0
-riskScore += useSectorBenchmark and sectorRelativeStrengthScore < sectorMinScore ? 0.7 : 0.0
-riskScore += htfStatus == HTF_WEAK ? 1.0 : htfStatus == HTF_NEUTRAL ? 0.3 : 0.0
-riskScore += close < smaMid and volume > avgVol * 1.20 ? 1.0 : 0.0
-
-riskScore := engine.clampScore(riskScore)
+riskScore = engine.riskScore(
+     extensionMidPct,
+     extensionWarnPct,
+     extensionDangerPct,
+     rsi,
+     nearResistance,
+     freshBreakout,
+     heavyRedNow,
+     distributionCount,
+     failedBreakout,
+     gapExhaustion,
+     liquidityWarning,
+     atrPct,
+     atrWarnPct,
+     atrDangerPct,
+     marketRiskOff,
+     marketRegime,
+     relativeStrengthStatus,
+     useSectorBenchmark,
+     sectorRelativeStrengthScore,
+     sectorMinScore,
+     htfStatus,
+     heavyMidMaBreak
+)
 
 riskControlScore = 10.0 - riskScore
 
+dualScore = engine.dualScore(
+     trendScore,
+     momentumScore,
+     setupScore,
+     riskScore,
+     marketScore,
+     combinedRelativeStrengthScore,
+     htfScore,
+     scoringMode
+)
 
-// ============================================================================
-// Step 4: Dual Score with HTF layer
-// ============================================================================
-dualScore =
-     engine.clampScore(
-         trendScore * (scoringMode == "Early Rocket" ? 0.20 : 0.25) +
-         momentumScore * (scoringMode == "Conservative" ? 0.20 : scoringMode == "Early Rocket" ? 0.30 : 0.25) +
-         setupScore * (scoringMode == "Conservative" ? 0.15 : 0.20) +
-         riskControlScore * (scoringMode == "Conservative" ? 0.15 : 0.10) +
-         marketScore * (scoringMode == "Conservative" ? 0.10 : scoringMode == "Early Rocket" ? 0.05 : 0.08) +
-         combinedRelativeStrengthScore * (scoringMode == "Conservative" ? 0.10 : scoringMode == "Early Rocket" ? 0.10 : 0.08) +
-         htfScore * (scoringMode == "Conservative" ? 0.05 : scoringMode == "Early Rocket" ? 0.05 : 0.04)
-     )
-
-
-// ============================================================================
-// Core danger conditions
-// ============================================================================
-blowoffTop =
-     trendOk and
-     extensionMidPct > extensionDangerPct and
-     rsi > 72.0 and
-     volRatio > 1.30 and
-     (upperWickPct > 35.0 or candleRange > atr * 1.50)
-
-distributionRisk =
-     distributionCount >= 3.0 or
-     heavyRedNow or
-     gapExhaustion or
-     close < smaMid and rsi < 45.0 and volume > avgVol * 1.20
-
+blowoffTop = engine.blowoffTop(trendOk, extensionMidPct, extensionDangerPct, rsi, volRatio, upperWickPct, candleRange, atr)
+distributionRisk = engine.distributionRisk(distributionCount, heavyRedNow, gapExhaustion, close < smaMid and rsi < 45.0 and volume > avgVol * 1.20)
 rsiCollapse = rsiPullbackLow < 35.0
 
+classification = engine.classifySetup(
+     trendScore,
+     momentumScore,
+     setupScore,
+     riskScore,
+     hadPullback,
+     notTooDeep,
+     heldNearSupport,
+     close > smaMid,
+     rsi,
+     extensionMidPct,
+     extensionWarnPct,
+     extensionDangerPct,
+     entryFiltersOk,
+     allFiltersOk,
+     distributionRisk,
+     blowoffTop,
+     failedBreakout,
+     freshBreakout,
+     strongClose,
+     close > smaSlow,
+     midSlopePct,
+     combinedRelativeStrengthScore
+)
 
-// ============================================================================
-// Step 4: Classification logic with HTF gate
-// ============================================================================
-primeCleanPullback =
-     trendScore >= 8.0 and
-     momentumScore >= 7.0 and
-     setupScore >= 8.0 and
-     riskScore <= 3.0 and
-     hadPullback and
-     notTooDeep and
-     heldNearSupport and
-     close > smaMid and
-     rsi >= 50.0 and
-     rsi <= 70.0 and
-     extensionMidPct <= extensionWarnPct and
-     entryFiltersOk and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout
+primeCleanPullback = classification == CLASS_PRIME_PULLBACK
+cleanBullPullback = classification == CLASS_CLEAN_PULLBACK
+freshBreakoutSignal = classification == CLASS_FRESH_BREAKOUT
+momentumContinuation = classification == CLASS_MOMENTUM_CONT
+extendedMomentum = classification == CLASS_EXTENDED_MOMENTUM
+overheatedMomentum = classification == CLASS_OVERHEATED_MOMENTUM
+filteredPullback = classification == CLASS_FILTERED_PULLBACK
+filteredMomentum = classification == CLASS_FILTERED_MOMENTUM
+trendRepair = classification == CLASS_TREND_REPAIR
 
-cleanBullPullback =
-     not primeCleanPullback and
-     trendScore >= 7.0 and
-     momentumScore >= 6.5 and
-     setupScore >= 7.5 and
-     riskScore <= 4.0 and
-     hadPullback and
-     notTooDeep and
-     heldNearSupport and
-     close > smaMid and
-     rsi >= 50.0 and
-     rsi <= 70.0 and
-     entryFiltersOk and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout
-
-freshBreakoutSignal =
-     trendScore >= 7.0 and
-     momentumScore >= 8.0 and
-     setupScore >= 6.5 and
-     riskScore <= 4.5 and
-     freshBreakout and
-     strongClose >= 0.65 and
-     entryFiltersOk and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout
-
-momentumContinuation =
-     trendScore >= 7.5 and
-     momentumScore >= 8.0 and
-     riskScore <= 5.0 and
-     not primeCleanPullback and
-     not cleanBullPullback and
-     not freshBreakoutSignal and
-     allFiltersOk and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout
-
-extendedMomentum =
-     trendScore >= 6.5 and
-     momentumScore >= 7.0 and
-     riskScore <= 6.0 and
-     not primeCleanPullback and
-     not cleanBullPullback and
-     not freshBreakoutSignal and
-     not momentumContinuation and
-     allFiltersOk and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout and
-     (
-         extensionMidPct > extensionWarnPct or
-         not hadPullback or
-         rsi > 68.0 or
-         freshBreakout
-     )
-
-overheatedMomentum =
-     trendScore >= 6.5 and
-     momentumScore >= 7.0 and
-     not primeCleanPullback and
-     not cleanBullPullback and
-     not freshBreakoutSignal and
-     not momentumContinuation and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout and
-     (
-         extensionMidPct > extensionDangerPct or
-         rsi > 75.0 or
-         extensionMidPct > extensionWarnPct and rsi > 70.0 or
-         riskScore >= 5.5
-     )
-
-filteredPullback =
-     not entryFiltersOk and
-     trendScore >= 7.0 and
-     setupScore >= 7.0 and
-     hadPullback and
-     notTooDeep and
-     heldNearSupport and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout
-
-filteredMomentum =
-     not entryFiltersOk and
-     trendScore >= 6.5 and
-     momentumScore >= 7.0 and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout
-
-trendRepair =
-     not primeCleanPullback and
-     not cleanBullPullback and
-     not freshBreakoutSignal and
-     not momentumContinuation and
-     not extendedMomentum and
-     not overheatedMomentum and
-     not filteredPullback and
-     not filteredMomentum and
-     not distributionRisk and
-     not blowoffTop and
-     not failedBreakout and
-     trendScore >= 4.5 and
-     trendScore < 7.0 and
-     momentumScore >= 4.5 and
-     close > smaSlow and
-     (
-         close > smaMid or
-         midSlopePct > 0.0 or
-         combinedRelativeStrengthScore >= 5.0
-     )
-
-classification =
-     blowoffTop ? CLASS_BLOWOFF_TOP :
-     failedBreakout ? CLASS_FAILED_BREAKOUT :
-     distributionRisk ? CLASS_DISTRIBUTION_RISK :
-     overheatedMomentum ? CLASS_OVERHEATED_MOMENTUM :
-     primeCleanPullback ? CLASS_PRIME_PULLBACK :
-     cleanBullPullback ? CLASS_CLEAN_PULLBACK :
-     freshBreakoutSignal ? CLASS_FRESH_BREAKOUT :
-     momentumContinuation ? CLASS_MOMENTUM_CONT :
-     extendedMomentum ? CLASS_EXTENDED_MOMENTUM :
-     filteredPullback ? CLASS_FILTERED_PULLBACK :
-     filteredMomentum ? CLASS_FILTERED_MOMENTUM :
-     trendRepair ? CLASS_TREND_REPAIR :
-     CLASS_NO_TRADE
-
-
-// ============================================================================
-// Pullback health
-// ============================================================================
-pullbackHealth =
-     heavyRedNow or rsiCollapse or hadPullback and not notTooDeep
-         ? PULLBACK_DANGEROUS
-         : hadPullback and notTooDeep and heldNearSupport and close > smaMid and not heavyRedNow
-             ? PULLBACK_HEALTHY
-             : PULLBACK_MIXED
-
-
-// ============================================================================
-// Action bias
-// ============================================================================
-filterProblem =
-     marketRiskOff ? "Market risk-off" :
-     not marketGateOk ? "Market failed" :
-     not sectorRelativeStrengthGateOk ? "Sector RS failed" :
-     not relativeStrengthGateOk ? "RS failed" :
-     not htfGateOk ? "HTF failed" :
-     not rewardRiskOk ? "R/R failed" :
-     "Filter failed"
+pullbackHealth = engine.pullbackHealthStatus(heavyRedNow, rsiCollapse, hadPullback, notTooDeep, heldNearSupport, close > smaMid)
+filterProblem = engine.filterProblemText(marketRiskOff, marketGateOk, sectorRelativeStrengthGateOk, relativeStrengthGateOk, htfGateOk, rewardRiskOk)
 
 rrText =
      na(rewardRiskToTarget)
@@ -1214,20 +997,7 @@ rrText =
 buyableText =
      rewardRiskOk ? "R/R ok" : "R/R below " + str.tostring(effectiveMinRewardRisk, "#.0") + "R"
 
-actionBias =
-     classification == CLASS_PRIME_PULLBACK ? "Best buyable, " + buyableText :
-     classification == CLASS_CLEAN_PULLBACK ? "Buyable, " + buyableText :
-     classification == CLASS_FRESH_BREAKOUT ? "Breakout buy, " + buyableText :
-     classification == CLASS_MOMENTUM_CONT ? "Watch / trail / smaller size" :
-     classification == CLASS_EXTENDED_MOMENTUM ? "Do not chase, wait mini-pullback" :
-     classification == CLASS_OVERHEATED_MOMENTUM ? "Overheated, avoid chasing" :
-     classification == CLASS_FILTERED_PULLBACK ? "Good chart, " + filterProblem :
-     classification == CLASS_FILTERED_MOMENTUM ? "Momentum, " + filterProblem :
-     classification == CLASS_TREND_REPAIR ? "Improving, not ready" :
-     classification == CLASS_DISTRIBUTION_RISK ? "Avoid / exit risk" :
-     classification == CLASS_FAILED_BREAKOUT ? "Avoid" :
-     classification == CLASS_BLOWOFF_TOP ? "Avoid chasing" :
-     "No clear trade"
+actionBias = engine.actionBiasText(classification, buyableText, filterProblem)
 
 
 // ============================================================================

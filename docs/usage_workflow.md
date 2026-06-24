@@ -9,7 +9,7 @@ Use the v3 scripts from `src/` for new chart review and strategy testing.
 3. Confirm the label or dashboard shows:
 
 ```text
-Engine: 3.1.0
+Engine: 3.2.0
 ```
 
 4. Start with these defaults:
@@ -46,7 +46,7 @@ Reward/Risk
 3. Confirm the dashboard shows:
 
 ```text
-Engine: 3.1.0
+Engine: 3.2.0
 ```
 
 4. Test one setup type at a time:
