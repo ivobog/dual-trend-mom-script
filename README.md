@@ -17,9 +17,12 @@ Use the strategy file when you want to compare entries and exits in TradingView 
 Key controls:
 
 - Enable or disable setup families: Prime Clean Pullback, Clean Bull Pullback, Fresh Breakout, Momentum Continuation.
+- Set market and relative-strength benchmarks.
+- Optionally enable a sector benchmark; when enabled, the combined RS score blends benchmark RS and sector RS.
+- Market risk-off uses the market benchmark distribution count plus trend/ROC weakness to block new long signals.
 - Choose stop mode from recent swing low, SMA 50 minus ATR buffer, or ATR multiple.
 - Set target R multiple and minimum reward/risk.
-- Optional exits: danger signal, close below SMA 50, max bars in trade, breakeven, ATR trailing stop.
+- Optional exits: danger signal, market risk-off, close below SMA 50, max bars in trade, breakeven, ATR trailing stop.
 - Optional date filter for controlled backtest windows.
 
-The strategy dashboard shows current trade state, active stop/target, bars in trade, and summary stats such as closed trades, win rate, net profit, profit factor, and max drawdown.
+The strategy dashboard shows current trade state, active stop/target, bars in trade, market risk-off status, sector RS, and summary stats such as closed trades, win rate, net profit, profit factor, and max drawdown.

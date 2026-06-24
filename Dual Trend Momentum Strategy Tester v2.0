@@ -129,12 +129,17 @@ showRiskRewardPlots = input.bool(true, "Show Stop / Target Lines", group=groupRi
 // ============================================================================
 useMarketFilter = input.bool(true, "Require Market Regime For Buyable Signals", group=groupMarketRs)
 useRelativeStrengthFilter = input.bool(true, "Require Relative Strength For Buyable Signals", group=groupMarketRs)
+useSectorBenchmark = input.bool(false, "Use Sector Benchmark In RS Score", group=groupMarketRs)
 
 marketSymbol = input.symbol("AMEX:SPY", "Market Regime Symbol", group=groupMarketRs)
 benchmarkSymbol = input.symbol("AMEX:SPY", "Relative Strength Benchmark", group=groupMarketRs)
+sectorSymbol = input.symbol("NASDAQ:QQQ", "Sector Benchmark", group=groupMarketRs)
 
 marketMinScore = input.float(5.5, "Minimum Market Score", minval=0.0, maxval=10.0, step=0.1, group=groupMarketRs)
 rsMinScore = input.float(5.5, "Minimum Relative Strength Score", minval=0.0, maxval=10.0, step=0.1, group=groupMarketRs)
+sectorMinScore = input.float(5.0, "Minimum Sector RS Score", minval=0.0, maxval=10.0, step=0.1, group=groupMarketRs)
+marketDistributionMax = input.int(4, "Market Risk-Off Distribution Count", minval=1, group=groupMarketRs)
+marketRiskOffPenalty = input.float(2.0, "Market Risk-Off Score Penalty", minval=0.0, maxval=5.0, step=0.25, group=groupMarketRs)
 
 rsSmaLen = input.int(50, "RS Line SMA Length", minval=5, group=groupMarketRs)
 
@@ -184,6 +189,7 @@ tradeFreshBreakout = input.bool(true, "Trade Fresh Breakout", group=groupStrateg
 tradeMomentumContinuation = input.bool(false, "Trade Momentum Continuation", group=groupStrategy)
 
 exitOnDangerSignal = input.bool(true, "Exit On Distribution / Failed Breakout / Blowoff", group=groupStrategy)
+exitOnMarketRiskOff = input.bool(true, "Exit On Market Risk-Off", group=groupStrategy)
 exitOnCloseBelowMidSma = input.bool(false, "Exit On Close Below SMA 50", group=groupStrategy)
 moveStopToBreakeven = input.bool(true, "Move Stop To Breakeven", group=groupStrategy)
 breakevenAtR = input.float(1.0, "Breakeven Trigger R", minval=0.25, step=0.25, group=groupStrategy)
@@ -220,6 +226,7 @@ string PULLBACK_DANGEROUS         = "Dangerous"
 string MARKET_BULLISH             = "Bullish"
 string MARKET_MIXED               = "Mixed"
 string MARKET_BEARISH             = "Bearish"
+string MARKET_RISK_OFF            = "Risk-off"
 
 string RS_STRONG                  = "Strong"
 string RS_NEUTRAL                 = "Neutral"
@@ -290,8 +297,20 @@ marketSma50 = request.security(marketSymbol, timeframe.period, ta.sma(close, 50)
 marketSma200 = request.security(marketSymbol, timeframe.period, ta.sma(close, 200), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 marketRocShort = request.security(marketSymbol, timeframe.period, rocPct(close, rocShortLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 marketRocMedium = request.security(marketSymbol, timeframe.period, rocPct(close, rocMediumLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+marketDistributionCount = request.security(
+     marketSymbol,
+     timeframe.period,
+     math.sum(close < open and volume > ta.sma(volume, volLen) * 1.25 and close < close[1] ? 1.0 : 0.0, distributionLookback),
+     gaps=barmerge.gaps_off,
+     lookahead=barmerge.lookahead_off
+)
 
 marketSma50Slope = slopePct(marketSma50, 10)
+
+marketRiskOff =
+     marketDistributionCount >= marketDistributionMax or
+     marketClose < marketSma200 and marketRocShort < 0.0 or
+     marketClose < marketSma50 and marketDistributionCount >= math.max(marketDistributionMax - 1, 1)
 
 marketScore = 0.0
 marketScore += marketClose > marketSma200 ? 2.5 : 0.0
@@ -300,16 +319,18 @@ marketScore += marketSma50 > marketSma200 ? 2.0 : 0.0
 marketScore += marketSma50Slope > 0.0 ? 1.5 : 0.0
 marketScore += marketRocShort > 0.0 ? 1.0 : 0.0
 marketScore += marketRocMedium > 0.0 ? 1.0 : 0.0
+marketScore -= marketRiskOff ? marketRiskOffPenalty : 0.0
 marketScore := clamp(marketScore, 0.0, 10.0)
 
 marketRegime =
+     marketRiskOff ? MARKET_RISK_OFF :
      marketScore >= 7.0 ? MARKET_BULLISH :
      marketScore >= 4.5 ? MARKET_MIXED :
      MARKET_BEARISH
 
 marketGateOk =
      not useMarketFilter or
-     marketScore >= marketMinScore
+     marketScore >= marketMinScore and not marketRiskOff
 
 
 // ============================================================================
@@ -319,6 +340,10 @@ benchmarkClose = request.security(benchmarkSymbol, timeframe.period, close, gaps
 benchmarkRocShort = request.security(benchmarkSymbol, timeframe.period, rocPct(close, rocShortLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 benchmarkRocMedium = request.security(benchmarkSymbol, timeframe.period, rocPct(close, rocMediumLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 benchmarkRocLong = request.security(benchmarkSymbol, timeframe.period, rocPct(close, rocLongLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sectorClose = request.security(sectorSymbol, timeframe.period, close, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sectorRocShort = request.security(sectorSymbol, timeframe.period, rocPct(close, rocShortLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sectorRocMedium = request.security(sectorSymbol, timeframe.period, rocPct(close, rocMediumLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+sectorRocLong = request.security(sectorSymbol, timeframe.period, rocPct(close, rocLongLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
 
 stockRocShort = rocPct(close, rocShortLen)
 stockRocMedium = rocPct(close, rocMediumLen)
@@ -340,6 +365,29 @@ stockBeatsBenchmarkShort = stockRocShort > benchmarkRocShort
 stockBeatsBenchmarkMedium = stockRocMedium > benchmarkRocMedium
 stockBeatsBenchmarkLong = stockRocLong > benchmarkRocLong
 
+sectorRsLine = sectorClose > 0.0 ? close / sectorClose : na
+sectorRsSma = ta.sma(sectorRsLine, rsSmaLen)
+sectorRsRocShort = rocPct(sectorRsLine, rocShortLen)
+sectorRsRocMedium = rocPct(sectorRsLine, rocMediumLen)
+sectorRsRocLong = rocPct(sectorRsLine, rocLongLen)
+sectorRsLineHigh = ta.highest(sectorRsLine, rsNewHighLookback)
+sectorRsNewHigh = not na(sectorRsLine) and sectorRsLine >= sectorRsLineHigh
+
+stockBeatsSectorShort = stockRocShort > sectorRocShort
+stockBeatsSectorMedium = stockRocMedium > sectorRocMedium
+stockBeatsSectorLong = stockRocLong > sectorRocLong
+
+sectorRelativeStrengthScore = 0.0
+sectorRelativeStrengthScore += not na(sectorRsLine) and not na(sectorRsSma) and sectorRsLine > sectorRsSma ? 2.0 : 0.0
+sectorRelativeStrengthScore += sectorRsRocShort > 0.0 ? 1.5 : 0.0
+sectorRelativeStrengthScore += sectorRsRocMedium > 0.0 ? 1.5 : 0.0
+sectorRelativeStrengthScore += sectorRsRocLong > 0.0 ? 1.0 : 0.0
+sectorRelativeStrengthScore += stockBeatsSectorShort ? 1.5 : 0.0
+sectorRelativeStrengthScore += stockBeatsSectorMedium ? 1.5 : 0.0
+sectorRelativeStrengthScore += stockBeatsSectorLong ? 0.5 : 0.0
+sectorRelativeStrengthScore += sectorRsNewHigh ? 0.5 : 0.0
+sectorRelativeStrengthScore := clamp(sectorRelativeStrengthScore, 0.0, 10.0)
+
 relativeStrengthScore = 0.0
 relativeStrengthScore += not na(rsLine) and not na(rsSma) and rsLine > rsSma ? 2.0 : 0.0
 relativeStrengthScore += rsRocShort > 0.0 ? 1.5 : 0.0
@@ -351,14 +399,29 @@ relativeStrengthScore += stockBeatsBenchmarkLong ? 0.5 : 0.0
 relativeStrengthScore += rsNewHigh ? 0.5 : 0.0
 relativeStrengthScore := clamp(relativeStrengthScore, 0.0, 10.0)
 
+combinedRelativeStrengthScore =
+     useSectorBenchmark
+         ? clamp(relativeStrengthScore * 0.70 + sectorRelativeStrengthScore * 0.30, 0.0, 10.0)
+         : relativeStrengthScore
+
 relativeStrengthStatus =
-     relativeStrengthScore >= 7.0 ? RS_STRONG :
-     relativeStrengthScore >= 4.5 ? RS_NEUTRAL :
+     combinedRelativeStrengthScore >= 7.0 ? RS_STRONG :
+     combinedRelativeStrengthScore >= 4.5 ? RS_NEUTRAL :
      RS_WEAK
+
+sectorRelativeStrengthStatus =
+     sectorRelativeStrengthScore >= 7.0 ? RS_STRONG :
+     sectorRelativeStrengthScore >= 4.5 ? RS_NEUTRAL :
+     RS_WEAK
+
+sectorRelativeStrengthGateOk =
+     not useSectorBenchmark or
+     sectorRelativeStrengthScore >= sectorMinScore
 
 relativeStrengthGateOk =
      not useRelativeStrengthFilter or
-     relativeStrengthScore >= rsMinScore
+     combinedRelativeStrengthScore >= rsMinScore and
+     sectorRelativeStrengthGateOk
 
 
 // ============================================================================
@@ -726,7 +789,7 @@ trendScore =
 momentumScore = 0.0
 
 // Relative strength, max 3.0
-momentumScore += relativeStrengthScore >= 8.0 ? 1.40 : relativeStrengthScore >= 6.5 ? 1.00 : relativeStrengthScore >= 5.0 ? 0.50 : 0.0
+momentumScore += combinedRelativeStrengthScore >= 8.0 ? 1.40 : combinedRelativeStrengthScore >= 6.5 ? 1.00 : combinedRelativeStrengthScore >= 5.0 ? 0.50 : 0.0
 momentumScore += rsRocShort > 0.0 ? 0.50 : 0.0
 momentumScore += rsRocMedium > 0.0 ? 0.50 : 0.0
 momentumScore += rsNewHigh ? 0.60 : 0.0
@@ -813,8 +876,9 @@ riskScore += distributionCount >= 3.0 ? 1.5 : 0.0
 riskScore += failedBreakout ? 2.0 : 0.0
 riskScore += atrPct > atrWarnPct ? 0.7 : 0.0
 riskScore += atrPct > atrDangerPct ? 1.0 : 0.0
-riskScore += marketRegime == MARKET_BEARISH ? 1.0 : marketRegime == MARKET_MIXED ? 0.4 : 0.0
+riskScore += marketRiskOff ? 1.5 : marketRegime == MARKET_BEARISH ? 1.0 : marketRegime == MARKET_MIXED ? 0.4 : 0.0
 riskScore += relativeStrengthStatus == RS_WEAK ? 1.0 : relativeStrengthStatus == RS_NEUTRAL ? 0.4 : 0.0
+riskScore += useSectorBenchmark and sectorRelativeStrengthScore < sectorMinScore ? 0.7 : 0.0
 riskScore += htfStatus == HTF_WEAK ? 1.0 : htfStatus == HTF_NEUTRAL ? 0.3 : 0.0
 riskScore += close < smaMid and volume > avgVol * 1.20 ? 1.0 : 0.0
 
@@ -833,7 +897,7 @@ dualScore =
          setupScore * 0.18 +
          riskControlScore * 0.10 +
          marketScore * 0.09 +
-         relativeStrengthScore * 0.09 +
+         combinedRelativeStrengthScore * 0.09 +
          htfScore * 0.06,
          0.0,
          10.0
@@ -993,7 +1057,7 @@ trendRepair =
      (
          close > smaMid or
          midSlopePct > 0.0 or
-         relativeStrengthScore >= 5.0
+         combinedRelativeStrengthScore >= 5.0
      )
 
 classification =
@@ -1027,7 +1091,9 @@ pullbackHealth =
 // Action bias
 // ============================================================================
 filterProblem =
+     marketRiskOff ? "Market risk-off" :
      not marketGateOk ? "Market failed" :
+     not sectorRelativeStrengthGateOk ? "Sector RS failed" :
      not relativeStrengthGateOk ? "RS failed" :
      not htfGateOk ? "HTF failed" :
      not rewardRiskOk ? "R/R failed" :
@@ -1149,6 +1215,11 @@ dangerExit =
      exitOnDangerSignal and
      (distributionRisk or failedBreakout or blowoffTop)
 
+marketRiskOffExit =
+     strategy.position_size > 0 and
+     exitOnMarketRiskOff and
+     marketRiskOff
+
 midSmaExit =
      strategy.position_size > 0 and
      exitOnCloseBelowMidSma and
@@ -1167,6 +1238,9 @@ dateExit =
 
 if dangerExit
     strategy.close(activeEntryId, comment="Danger exit")
+
+if marketRiskOffExit
+    strategy.close(activeEntryId, comment="Market risk-off exit")
 
 if midSmaExit
     strategy.close(activeEntryId, comment="SMA 50 exit")
@@ -1244,7 +1318,10 @@ plot(momentumScore, "Momentum score", display=display.data_window)
 plot(setupScore, "Setup score", display=display.data_window)
 plot(riskScore, "Risk score", display=display.data_window)
 plot(marketScore, "Market score", display=display.data_window)
-plot(relativeStrengthScore, "Relative strength score", display=display.data_window)
+plot(marketDistributionCount, "Market distribution count", display=display.data_window)
+plot(combinedRelativeStrengthScore, "Relative strength score", display=display.data_window)
+plot(relativeStrengthScore, "Benchmark relative strength score", display=display.data_window)
+plot(sectorRelativeStrengthScore, "Sector relative strength score", display=display.data_window)
 
 plot(extensionMidPct, "Extension above 50 SMA %", display=display.data_window)
 plot(volRatio, "Volume ratio", display=display.data_window)
@@ -1254,6 +1331,8 @@ plot(position52, "52-week position %", display=display.data_window)
 
 plot(showMarketRsPlots ? rsLine : na, "RS Line", color=color.new(color.fuchsia, 0), linewidth=1)
 plot(showMarketRsPlots ? rsSma : na, "RS SMA", color=color.new(color.fuchsia, 60), linewidth=2)
+plot(showMarketRsPlots and useSectorBenchmark ? sectorRsLine : na, "Sector RS Line", color=color.new(color.aqua, 0), linewidth=1)
+plot(showMarketRsPlots and useSectorBenchmark ? sectorRsSma : na, "Sector RS SMA", color=color.new(color.aqua, 60), linewidth=2)
 
 plot(showRiskRewardPlots ? suggestedStop : na, "Suggested stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
 plot(showRiskRewardPlots ? target2R : na, "R target", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
@@ -1278,6 +1357,7 @@ bgcolor(showBackground and primeCleanPullback ? color.new(color.lime, 88) : na)
 bgcolor(showBackground and cleanBullPullback ? color.new(color.green, 90) : na)
 bgcolor(showBackground and freshBreakoutSignal ? color.new(color.aqua, 90) : na)
 bgcolor(showBackground and (distributionRisk or failedBreakout or blowoffTop or overheatedMomentum) ? color.new(color.red, 90) : na)
+bgcolor(showBackground and marketRiskOff ? color.new(color.red, 94) : na)
 bgcolor(showBackground and (filteredPullback or filteredMomentum) ? color.new(color.yellow, 88) : na)
 bgcolor(showBackground and trendRepair ? color.new(color.blue, 92) : na)
 
@@ -1300,7 +1380,8 @@ if barstate.islast and showLabel
          "\n" + classification +
          "\nAction: " + actionBias +
          "\nMarket: " + marketRegime + " " + str.tostring(marketScore, "#.0") +
-         "\nRS: " + relativeStrengthStatus + " " + str.tostring(relativeStrengthScore, "#.0") +
+         "\nRS: " + relativeStrengthStatus + " " + str.tostring(combinedRelativeStrengthScore, "#.0") +
+         "\nSector RS: " + (useSectorBenchmark ? sectorRelativeStrengthStatus + " " + str.tostring(sectorRelativeStrengthScore, "#.0") : "Off") +
          "\nHTF: " + htfStatus + " " + str.tostring(htfScore, "#.0") +
          "\nPullback: " + pullbackHealth +
          "\nStop: " + str.tostring(suggestedStop, format.mintick) +
@@ -1323,7 +1404,7 @@ if barstate.islast and showLabel
 // ============================================================================
 // Score table
 // ============================================================================
-var table scoreTable = table.new(position.top_right, 2, 50, border_width=1)
+var table scoreTable = table.new(position.top_right, 2, 58, border_width=1)
 
 if barstate.islast and showTable
     table.cell(scoreTable, 0, 0, "Metric", bgcolor=color.black, text_color=color.white)
@@ -1360,7 +1441,7 @@ if barstate.islast and showTable
     table.cell(scoreTable, 1, 10, marketRegime + " " + str.tostring(marketScore, "#.0"), bgcolor=marketColor, text_color=color.white)
 
     table.cell(scoreTable, 0, 11, "Rel strength")
-    table.cell(scoreTable, 1, 11, relativeStrengthStatus + " " + str.tostring(relativeStrengthScore, "#.0"), bgcolor=rsColor, text_color=color.white)
+    table.cell(scoreTable, 1, 11, relativeStrengthStatus + " " + str.tostring(combinedRelativeStrengthScore, "#.0"), bgcolor=rsColor, text_color=color.white)
 
     table.cell(scoreTable, 0, 12, "Pullback")
     table.cell(scoreTable, 1, 12, pullbackHealth)
@@ -1480,6 +1561,30 @@ if barstate.islast and showTable
     table.cell(scoreTable, 0, 49, "Max drawdown")
     table.cell(scoreTable, 1, 49, str.tostring(strategy.max_drawdown, "#.##"))
 
+    table.cell(scoreTable, 0, 50, "Market risk-off")
+    table.cell(scoreTable, 1, 50, str.tostring(marketRiskOff), bgcolor=marketRiskOff ? color.new(color.red, 0) : color.new(color.green, 0), text_color=color.white)
+
+    table.cell(scoreTable, 0, 51, "Market dist count")
+    table.cell(scoreTable, 1, 51, str.tostring(marketDistributionCount, "#"))
+
+    table.cell(scoreTable, 0, 52, "Sector RS")
+    table.cell(scoreTable, 1, 52, useSectorBenchmark ? sectorRelativeStrengthStatus + " " + str.tostring(sectorRelativeStrengthScore, "#.0") + "/10" : "Off")
+
+    table.cell(scoreTable, 0, 53, "Sector ROC " + str.tostring(rocShortLen))
+    table.cell(scoreTable, 1, 53, useSectorBenchmark ? str.tostring(sectorRocShort, "#.0") + "%" : "Off")
+
+    table.cell(scoreTable, 0, 54, "Risk-off exit")
+    table.cell(scoreTable, 1, 54, exitOnMarketRiskOff ? "On" : "Off")
+
+    table.cell(scoreTable, 0, 55, "Benchmark RS")
+    table.cell(scoreTable, 1, 55, str.tostring(relativeStrengthScore, "#.0") + "/10")
+
+    table.cell(scoreTable, 0, 56, "Combined RS")
+    table.cell(scoreTable, 1, 56, str.tostring(combinedRelativeStrengthScore, "#.0") + "/10")
+
+    table.cell(scoreTable, 0, 57, "Risk-off penalty")
+    table.cell(scoreTable, 1, 57, marketRiskOff ? str.tostring(marketRiskOffPenalty, "#.##") : "0")
+
 
 // ============================================================================
 // Alerts
@@ -1494,5 +1599,7 @@ alertcondition(filteredPullback, "Filtered pullback", "Pullback setup detected b
 alertcondition(filteredMomentum, "Filtered momentum", "Momentum setup detected but market, relative strength, or HTF filter failed.")
 alertcondition(trendRepair, "Trend repair", "Trend repair detected.")
 alertcondition(distributionRisk, "Distribution risk", "Distribution risk detected.")
+alertcondition(marketRiskOff, "Market risk-off", "Market risk-off regime detected.")
+alertcondition(useSectorBenchmark and not sectorRelativeStrengthGateOk, "Sector RS failed", "Sector relative strength filter failed.")
 alertcondition(failedBreakout, "Failed breakout", "Failed breakout detected.")
 alertcondition(blowoffTop, "Blowoff top", "Blowoff top risk detected.")
