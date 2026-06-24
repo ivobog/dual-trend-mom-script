@@ -1,0 +1,821 @@
+Your current script is already a good chart-geometry classifier. It uses SMA 20/50/200, RSI, ATR, volume ratio, pullback depth, SMA support, breakout detection, distribution count, failed breakout detection and final classifications like clean bull pullback, extended momentum and distribution risk.
+
+But to push it toward:
+
+Trend detection: 8/10
+Momentum detection: 8/10
+
+we need to add the missing institutional-style filters:
+
+market regime
+relative strength
+multi-timeframe confirmation
+rate-of-change momentum
+volume accumulation / dry-up logic
+trend slope normalized by volatility
+52-week strength / proximity to highs
+clearer signal separation: pullback vs breakout vs extended continuation
+
+TradingView’s current Pine Script documentation is for Pine Script v6, so I would upgrade the script from v5 to v6 for the new version.
+
+Plan for v2.0
+Goal
+
+Build:
+
+Dual Trend + Momentum Swing Score v2.0
+
+The script should answer three questions:
+
+Is the stock in a real trend?
+Is the stock showing real momentum versus the market?
+Is the current candle/setup a good entry or only a watchlist signal?
+
+So instead of one generic score, v2.0 should show:
+
+Dual Score: 8.3/10
+Trend Score: 8.6/10
+Momentum Score: 8.1/10
+Setup Score: 7.8/10
+Risk Score: 2.1/10
+Market Regime: Bullish
+Relative Strength: Strong
+Classification: Clean Bull Pullback
+Action Bias: Buyable if reward/risk >= 2R
+
+That is much more useful than just “score 7.8.”
+
+Phase 1: Keep the best parts of current script
+
+I would keep these parts because they are already good:
+
+Current feature	Keep?	Why
+SMA 20/50/200	Yes	Good trend skeleton
+Pullback depth %	Yes	Helps avoid shallow noise and deep damage
+Near SMA support	Yes	Useful for clean pullback detection
+RSI range logic	Yes, but improve	Good, but too simple
+Volume ratio	Yes	Useful, but incomplete
+Failed breakout detection	Yes	Very important
+Distribution count	Yes	Good danger detector
+Extension above SMA 50	Yes	Helps avoid chasing
+Last-bar label/table	Yes	Practical for manual workflow
+Alerts	Yes	Useful for scanning
+
+The current script has a clean base. We do not throw away the engine. We add a turbo, brakes and a dashboard.
+
+Phase 2: Upgrade trend detection to 8/10
+
+Your current trend detection is mostly:
+
+close > SMA 200
+SMA 50 > SMA 200
+SMA 50 slope > 0
+SMA 200 slope > 0
+close > SMA 50
+
+That is good, but it misses trend quality.
+
+New Trend Engine v2.0
+1. Multi-timeframe trend confirmation
+
+Add optional higher-timeframe trend filter.
+
+For example:
+
+Chart timeframe	Higher timeframe confirmation
+Daily chart	Weekly trend
+4H chart	Daily trend
+1H chart	4H / Daily trend
+
+For your 1-week swing trades, I would mostly use:
+
+daily chart signal
+weekly trend confirmation
+
+The higher timeframe should check:
+
+weekly close > weekly SMA 30 or SMA 40
+weekly SMA slope rising
+weekly price not collapsing below trend support
+
+This prevents buying a nice daily bounce inside a weak weekly downtrend.
+
+Important implementation standard: when using request.security() for higher-timeframe data, we must avoid repaint/future leaks. TradingView warns that lookahead behavior can leak future data if used incorrectly, so v2.0 should use confirmed higher-timeframe values or safe lookahead settings.
+
+2. Add EMA/SMA trend stack
+
+Instead of only SMA 20/50/200, use a configurable stack:
+
+Moving average	Role
+10 EMA	Short-term momentum
+20 EMA/SMA	Pullback support
+50 SMA	Swing trend
+150 SMA	Intermediate structure
+200 SMA	Long-term trend
+
+Trend is stronger when:
+
+close > 20 MA
+20 MA > 50 MA
+50 MA > 150 MA
+150 MA > 200 MA
+
+This gives a cleaner “trend ladder.”
+
+3. Use normalized slope, not simple slope
+
+Current slope checks whether SMA slope is above zero. That is useful, but too crude.
+
+Better:
+
+slope strength = MA change over N bars / ATR
+
+Why? Because +2% slope is meaningful for a slow stock, but maybe meaningless for a wild small cap.
+
+New trend score should measure:
+
+Metric	Meaning
+SMA 50 slope normalized by ATR	Real trend steepness
+SMA 200 slope normalized by ATR	Long-term trend improvement
+Price distance from SMA 50	Healthy or too extended
+Price above rising 20/50/200	Trend alignment
+Higher highs / higher lows	Structure confirmation
+4. Add ADX / DMI trend strength
+
+Add:
+
+Metric	Use
+ADX	Measures trend strength
++DI > -DI	Confirms bullish directional pressure
+
+Good bullish trend:
+
+ADX > 18 or 20
++DI > -DI
+ADX rising or stable
+
+This helps separate actual trend from sideways noise.
+
+5. Add 52-week position
+
+For trend strength:
+
+Metric	Interpretation
+Close within 15% of 52-week high	Strong
+Close near 52-week low	Weak
+New 3-month / 6-month high	Momentum confirmation
+
+Many real leaders stay near highs. Weak stocks spend time near lows wearing fake moustaches.
+
+New Trend Score v2.0
+
+Target structure:
+
+Trend component	Weight
+MA stack alignment	25%
+MA slope strength	20%
+Higher-timeframe trend	20%
+ADX/DMI trend strength	15%
+Higher highs/lows structure	10%
+52-week position	10%
+
+Trend Score output:
+
+Trend Score: 0–10
+Trend Quality: Weak / Improving / Strong / Powerful
+Phase 3: Upgrade momentum detection to 8/10
+
+Your current momentum logic uses RSI, volume ratio, strong close, fresh breakout and green-volume-vs-red-volume. Good start, but not enough.
+
+The biggest missing piece is relative strength.
+
+A stock is not truly strong just because it rises. It must rise better than the market.
+
+New Momentum Engine v2.0
+1. Relative strength versus benchmark
+
+Add benchmark input:
+
+Benchmark: SPY / QQQ / sector ETF / custom ticker
+
+For US growth stocks, default could be:
+
+QQQ
+
+For broader stocks:
+
+SPY
+
+For Swiss stocks:
+
+SMI or relevant Swiss ETF/index
+
+The script should calculate:
+
+RS line = stock close / benchmark close
+
+Momentum improves when:
+
+RS line > RS 50 SMA
+RS line making 20-day high
+RS line rising over 21 and 63 bars
+
+This is the biggest upgrade.
+
+2. Add rate-of-change momentum
+
+Add:
+
+Metric	Meaning
+ROC 21	1-month momentum
+ROC 63	3-month momentum
+ROC 126	6-month momentum
+
+Momentum Score should reward:
+
+ROC21 > 0
+ROC63 > 0
+ROC21 stronger than benchmark ROC21
+ROC63 stronger than benchmark ROC63
+
+This detects actual price leadership.
+
+3. Add volume accumulation quality
+
+Current script checks whether green-volume average beats red-volume average. Good.
+
+But v2.0 should add:
+
+Metric	Purpose
+Up/down volume ratio 20 bars	Accumulation
+Volume dry-up during pullback	Healthy pullback
+Breakout volume expansion	Real demand
+Distribution days	Danger
+OBV slope	Accumulation confirmation
+CMF optional	Buying pressure confirmation
+
+A strong setup should show:
+
+volume expands on up days
+volume contracts during pullback
+no cluster of high-volume red candles
+OBV rising or stable
+
+This will make pullback quality much better.
+
+4. Add volatility contraction
+
+Many good swing setups tighten before moving.
+
+Add:
+
+Metric	Meaning
+ATR %	Volatility level
+ATR contraction	Pullback becoming controlled
+Narrow range bar	Compression
+Range contraction before breakout	Coiled setup
+
+Good:
+
+ATR% not too high
+ATR declining during pullback
+current range below average range before breakout
+
+This prevents buying chaotic, sloppy pullbacks.
+
+5. Improve RSI logic
+
+Current RSI score likes RSI between 50 and 65, and allows 45–70. Good, but v2.0 should separate:
+
+RSI behavior	Interpretation
+RSI 50–65 after pullback	Clean bull pullback
+RSI 65–75 with breakout	Momentum continuation
+RSI >75	Overheated unless exceptional
+RSI fails at 50	Weak bounce
+RSI makes higher low while price pulls back	Bullish momentum divergence
+
+New RSI module:
+
+RSI regime
+RSI slope
+RSI recovery from pullback
+RSI not overheated
+New Momentum Score v2.0
+Momentum component	Weight
+Relative strength vs benchmark	30%
+ROC 21/63/126	25%
+Volume accumulation	20%
+Breakout/trigger strength	10%
+RSI momentum	10%
+Volatility contraction	5%
+
+Momentum Score output:
+
+Momentum Score: 0–10
+Momentum Type: Weak / Improving / Strong / Explosive / Overheated
+Phase 4: New setup classifications
+
+The current classifications are useful:
+
+Clean bull pullback
+Extended momentum
+Distribution risk
+Blowoff top
+Failed breakout
+Unclear
+
+v2.0 should expand them.
+
+New classifications
+Classification	Meaning
+Prime Clean Pullback	Best buyable setup
+Clean Bull Pullback	Good setup
+Fresh Breakout	Buyable breakout with volume
+Momentum Continuation	Strong but slightly extended
+Extended Momentum	Watchlist / half-size only
+Overheated Momentum	Too stretched, avoid chasing
+Distribution Risk	Avoid / exit risk
+Failed Breakout	Avoid
+Trend Repair	Improving but not ready
+No Trade	Not enough signal
+
+This is more precise.
+
+Phase 5: New scoring model
+
+Instead of one blended score, v2.0 should show separated scores.
+
+v2.0 scorecard
+Score	Range	Meaning
+Dual Score	0–10	Final signal quality
+Trend Score	0–10	Trend strength
+Momentum Score	0–10	Momentum/leadership
+Setup Score	0–10	Entry quality
+Risk Score	0–10	Danger level
+Market Score	0–10	Broad market regime
+Relative Strength Score	0–10	Stock vs benchmark
+
+Final formula:
+
+Dual Score =
+  Trend Score * 0.30 +
+  Momentum Score * 0.30 +
+  Setup Score * 0.20 +
+  Market Score * 0.10 +
+  Risk Control Score * 0.10
+
+Where:
+
+Risk Control Score = 10 - Risk Score
+
+For buy signals:
+
+Signal	Rule
+Prime Clean Pullback	Trend ≥ 8, Momentum ≥ 7, Setup ≥ 8, Risk ≤ 3
+Clean Bull Pullback	Trend ≥ 7, Momentum ≥ 6.5, Setup ≥ 7.5, Risk ≤ 4
+Fresh Breakout	Trend ≥ 7, Momentum ≥ 8, volume breakout true, Risk ≤ 4
+Momentum Continuation	Trend ≥ 8, Momentum ≥ 8, but Setup < 7.5
+Extended Momentum	Momentum strong, but extension or RSI risk elevated
+Avoid	Risk ≥ 6 or distribution/failure present
+Phase 6: Add market regime filter
+
+This is a must.
+
+Inputs:
+
+Market benchmark: SPY
+Growth benchmark: QQQ
+Sector benchmark: optional
+Use market filter: true/false
+
+Market regime:
+
+Market condition	Output
+Benchmark above SMA 50 and SMA 200	Bullish
+Benchmark above SMA 200 but below SMA 50	Mixed
+Benchmark below SMA 200	Bearish
+Benchmark distribution count high	Risk-off
+
+Buy rules:
+
+Market regime	Position behavior
+Bullish	Full normal signals allowed
+Mixed	Only best signals, smaller size
+Bearish	No new long signals or warning only
+
+This one change alone may save many bad trades.
+
+Phase 7: Add relative strength regime
+
+Inputs:
+
+Benchmark symbol: SPY or QQQ
+Sector benchmark: optional
+RS lookback short: 21
+RS lookback medium: 63
+RS SMA length: 50
+
+RS logic:
+
+RS line rising
+RS line above RS SMA
+RS line near 20/63-day high
+stock ROC > benchmark ROC
+
+Output:
+
+Relative Strength: Strong / Neutral / Weak
+
+Buy rules:
+
+RS status	Action
+Strong	Good
+Neutral	Only clean pullback allowed
+Weak	No buy, even if chart looks good
+
+This protects you from buying “pretty but weak” stocks.
+
+Phase 8: Add entry-quality and risk/reward helpers
+
+Pine cannot know your full trading plan, but it can help estimate.
+
+Add optional:
+
+Feature	Use
+ATR stop line	Suggested stop
+SMA 50 stop line	Swing stop
+Prior swing low stop	Structure stop
+2R target line	Reward/risk visualization
+Resistance distance	Avoid entries too close to resistance
+
+Suggested stop options:
+
+Stop = recent swing low
+Stop = SMA 50 minus ATR buffer
+Stop = entry - 1.5 ATR
+
+The script can display:
+
+ATR Stop: 96.40
+2R Target: 108.20
+Resistance Distance: 4.1%
+Reward/Risk: 1.6R
+
+Then it can say:
+
+Buyable: No, reward/risk below 2R
+
+This upgrades it from “indicator” to “decision assistant.”
+
+Phase 9: Best-practice Pine implementation plan
+Technical standards
+
+I would implement v2.0 like this:
+
+Area	Standard
+Pine version	Upgrade to //@version=6
+Repainting	Avoid future leaks in request.security()
+Higher timeframe	Use confirmed data logic
+User inputs	Grouped inputs: Trend, Momentum, Market, Risk, Display
+Functions	Modular helper functions
+Scores	Each score 0–10 and clamped
+Labels	Only last-bar label to avoid clutter
+Tables	Compact dashboard table
+Alerts	Separate alerts for each signal
+Debug mode	Optional detailed score output
+Performance	Avoid excessive labels/objects
+Customization	Allow benchmark/sector symbols
+
+TradingView’s documentation specifically discusses repainting/future leaks with request.security(), so v2.0 should be careful with higher-timeframe and benchmark requests.
+
+Phase 10: Indicator + strategy split
+
+I would not make only one script.
+
+I would create two versions.
+
+Script A: Indicator
+
+Name:
+
+Dual Trend Momentum Score v2.0
+
+Purpose:
+
+live chart reading
+labels
+score table
+alerts
+manual decisions
+Script B: Strategy/backtest
+
+Name:
+
+Dual Trend Momentum Strategy Tester v2.0
+
+Purpose:
+
+test entries
+test exits
+test stop logic
+test R-multiple exits
+compare clean pullback vs breakout vs momentum continuation
+
+This is important because an indicator can look beautiful, but the strategy tester tells you whether the beast has teeth or just shiny whiskers.
+
+v2.0 modules
+
+The new script should have these modules:
+
+Module 1: Inputs
+
+Grouped sections:
+
+Trend settings
+Momentum settings
+Market/relative strength settings
+Pullback/breakout settings
+Risk settings
+Display settings
+Alert settings
+Module 2: Core indicators
+
+Calculate:
+
+SMA/EMA 10, 20, 50, 150, 200
+RSI
+ATR
+ADX/DMI
+Volume averages
+OBV
+ROC 21/63/126
+52-week high/low
+Module 3: Market regime
+
+Calculate:
+
+benchmark close
+benchmark SMA 50/200
+benchmark ROC
+market regime score
+Module 4: Relative strength
+
+Calculate:
+
+stock / benchmark RS line
+RS SMA
+RS ROC
+RS new high
+stock ROC minus benchmark ROC
+Module 5: Trend score
+
+Score:
+
+MA stack
+MA slopes
+ADX/DMI
+higher timeframe trend
+52-week position
+higher highs/lows
+Module 6: Momentum score
+
+Score:
+
+relative strength
+ROC
+RSI recovery
+volume accumulation
+breakout pressure
+volatility contraction
+Module 7: Setup score
+
+Score:
+
+pullback depth
+support touch
+strong close
+breakout level
+volume dry-up
+risk/reward
+Module 8: Risk score
+
+Score danger:
+
+overextension
+RSI overheat
+heavy red volume
+distribution days
+failed breakout
+gap exhaustion
+close below SMA 50
+weak market regime
+poor liquidity warning if volume available
+Module 9: Classification
+
+Return:
+
+Prime Clean Pullback
+Clean Bull Pullback
+Fresh Breakout
+Momentum Continuation
+Extended Momentum
+Overheated Momentum
+Distribution Risk
+Failed Breakout
+Trend Repair
+No Trade
+Module 10: Display and alerts
+
+Display:
+
+Dual Score
+Trend Score
+Momentum Score
+Setup Score
+Risk Score
+Market Regime
+Relative Strength
+Classification
+Action Bias
+
+Alerts:
+
+Prime Clean Pullback
+Clean Bull Pullback
+Fresh Breakout
+Momentum Continuation
+Risk Exit
+Distribution Risk
+Failed Breakout
+The new trading logic
+Buyable signals
+1. Prime Clean Pullback
+Trend Score >= 8
+Momentum Score >= 7
+Setup Score >= 8
+Risk Score <= 3
+Market Regime bullish
+Relative Strength strong
+Pullback healthy
+
+This becomes your best signal.
+
+2. Clean Bull Pullback
+Trend Score >= 7
+Momentum Score >= 6.5
+Setup Score >= 7.5
+Risk Score <= 4
+Market not bearish
+RS not weak
+
+This is your normal buy signal.
+
+3. Fresh Breakout
+Trend Score >= 7
+Momentum Score >= 8
+Breakout volume confirmed
+Close near candle high
+Risk Score <= 4
+Reward/risk acceptable
+
+This is buyable, but faster and more aggressive.
+
+Watchlist signals
+Momentum Continuation
+Trend strong
+Momentum strong
+But setup not ideal
+
+Action:
+
+Watch for mini-pullback or half-size only
+Extended Momentum
+Trend and momentum are strong
+But price is stretched
+
+Action:
+
+Do not chase unless breakout quality is excellent
+Avoid signals
+Distribution Risk
+Failed Breakout
+Overheated Momentum
+Blowoff Top
+Bearish Market Regime
+Weak Relative Strength
+What changes from your current script?
+Current v1
+Good at:
+- chart geometry
+- pullback depth
+- SMA support
+- simple trend structure
+- volume warning
+- failed breakout warning
+New v2
+Better at:
+- market-aware signals
+- benchmark-relative strength
+- multi-timeframe trend confirmation
+- true momentum scoring
+- avoiding weak stocks in strong markets
+- avoiding extended/chase entries
+- separating pullback, breakout and continuation setups
+- showing actionable score dashboard
+My final v2.0 design target
+
+I would design the script so that your workflow becomes:
+
+1. Upload CSV
+2. Rank companies by fundamentals/quant score
+3. Open chart
+4. Apply Dual Trend Momentum v2.0
+5. Buy only if:
+   - Classification = Prime Clean Pullback or Clean Bull Pullback
+   - Dual Score >= 8
+   - Trend Score >= 7.5
+   - Momentum Score >= 7
+   - Risk Score <= 4
+   - Market Regime not bearish
+   - Relative Strength not weak
+   - Reward/risk >= 2R
+
+For Fresh Breakout, use smaller size or stricter exit.
+
+For Extended Momentum, mostly watch and wait.
+
+Implementation order
+
+I would build it in this order:
+
+Step 1: Convert to Pine v6
+Keep existing behavior intact.
+Rename to v2.0.
+Clean inputs into grouped sections.
+Step 2: Add score separation
+Trend Score 0–10
+Momentum Score 0–10
+Setup Score 0–10
+Risk Score 0–10
+Dual Score 0–10
+Step 3: Add benchmark relative strength
+Benchmark symbol input
+RS line
+RS SMA
+RS ROC
+RS score
+Step 4: Add market regime
+Market symbol input
+Market SMA 50/200
+Market score
+Bullish/mixed/bearish status
+Step 5: Add multi-timeframe confirmation
+Weekly trend confirmation
+Safe non-repainting handling
+Step 6: Add ADX/DMI + ROC momentum
+Trend strength
+Directional movement
+21/63/126 ROC
+Step 7: Add improved volume logic
+Up/down volume ratio
+OBV slope
+Volume dry-up on pullback
+Breakout volume expansion
+Step 8: Add risk/reward helper
+Suggested stop
+2R target
+resistance distance
+warning if reward/risk poor
+Step 9: Add final classifications
+Prime Clean Pullback
+Clean Bull Pullback
+Fresh Breakout
+Momentum Continuation
+Extended Momentum
+Overheated Momentum
+Distribution Risk
+Failed Breakout
+No Trade
+Step 10: Add alerts and table
+Clean readable dashboard
+No clutter
+Separate alertcondition per signal
+My verdict
+
+The current script is a good v1 geometry scanner.
+
+The v2.0 script should become a dual trend + momentum decision system.
+
+The real upgrade is not adding more colorful candles. The upgrade is adding:
+
+Market context + relative strength + multi-timeframe trend + ROC momentum + volume quality + risk/reward
+
+That is how we move from:
+
+“This chart looks healthy.”
+
+to:
+
+“This stock is trending, leading the market, pulling back cleanly, supported by volume, not overheated, and tradable with defined risk.”
+
+That is the v2.0 mission.
