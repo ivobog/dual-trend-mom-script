@@ -1,0 +1,123 @@
+//@version=6
+library("DualTrendMomentumEngine", overlay=false)
+
+// ============================================================================
+// Dual Trend + Momentum Engine
+// Engine version: 3.1.0
+//
+// Published v2 import path:
+// import ivobog/DualTrendMomentumEngine/2 as engine
+//
+// Current v3 scripts import this library for shared constants, score clamping,
+// and pure helper functions. The larger signal calculation engine remains
+// local until the library exports that full computation surface.
+// ============================================================================
+
+export engineVersion() =>
+    "3.1.0"
+
+export classPrimePullback() =>
+    "Prime clean pullback"
+
+export classCleanPullback() =>
+    "Clean bull pullback"
+
+export classFreshBreakout() =>
+    "Fresh breakout"
+
+export classMomentumContinuation() =>
+    "Momentum continuation"
+
+export classExtendedMomentum() =>
+    "Extended momentum"
+
+export classOverheatedMomentum() =>
+    "Overheated momentum"
+
+export classFilteredPullback() =>
+    "Filtered pullback"
+
+export classFilteredMomentum() =>
+    "Filtered momentum"
+
+export classTrendRepair() =>
+    "Trend repair"
+
+export classDistributionRisk() =>
+    "Distribution risk"
+
+export classBlowoffTop() =>
+    "Blowoff top"
+
+export classFailedBreakout() =>
+    "Failed breakout"
+
+export classNoTrade() =>
+    "No trade"
+
+export pullbackHealthy() =>
+    "Healthy"
+
+export pullbackMixed() =>
+    "Mixed"
+
+export pullbackDangerous() =>
+    "Dangerous"
+
+export marketBullish() =>
+    "Bullish"
+
+export marketMixed() =>
+    "Mixed"
+
+export marketBearish() =>
+    "Bearish"
+
+export marketRiskOff() =>
+    "Risk-off"
+
+export rsStrong() =>
+    "Strong"
+
+export rsNeutral() =>
+    "Neutral"
+
+export rsWeak() =>
+    "Weak"
+
+export htfStrong() =>
+    "Strong"
+
+export htfNeutral() =>
+    "Neutral"
+
+export htfWeak() =>
+    "Weak"
+
+export clampScore(float value) =>
+    math.max(0.0, math.min(10.0, value))
+
+export rocPct(series float source, int lookback) =>
+    not na(source[lookback]) and source[lookback] != 0.0
+         ? (source - source[lookback]) / source[lookback] * 100.0
+         : 0.0
+
+export slopePct(series float source, int lookback) =>
+    not na(source[lookback]) and source[lookback] != 0.0
+         ? (source - source[lookback]) / source[lookback] * 100.0
+         : 0.0
+
+export slopeAtr(series float source, int lookback, series float atrValue) =>
+    not na(source[lookback]) and atrValue > 0.0
+         ? (source - source[lookback]) / atrValue
+         : 0.0
+
+export pctDistance(float valueA, float valueB, float denominator, float fallback) =>
+    denominator != 0.0 ? math.abs(valueA - valueB) / denominator * 100.0 : fallback
+
+export rollingSum(series float source, int length) =>
+    math.sum(source, length)
+
+export distributionBar(float volumeMultiplier, int averageVolumeLength) =>
+    distributionAvgVol = ta.sma(volume, averageVolumeLength)
+    close < open and volume > distributionAvgVol * volumeMultiplier and close < close[1] ? 1.0 : 0.0

@@ -4,13 +4,45 @@ TradingView Pine v6 scripts for the Dual Trend + Momentum Swing Score workflow.
 
 The repository contains an indicator for live chart review and a matching strategy tester for backtesting the same signal engine.
 
+Current v3 files live in `src/`. Older root-level scripts are kept as stable baselines and migration history.
+
 ## Files
 
+- `src/dual_trend_momentum_indicator_v3.pine`
+  Current v3.1 indicator for chart review, dashboards, labels, plots, and alerts.
+
+- `src/dual_trend_momentum_strategy_v3.pine`
+  Current v3.1 strategy tester with setup toggles, exits, scoring modes, stop/target modes, and market-regime split filters.
+
+- `src/dual_trend_momentum_engine.pine`
+  Published Pine library source. Current script import path: `import ivobog/DualTrendMomentumEngine/2 as engine`.
+
+- `CHANGELOG.md`
+  Version history and release notes.
+
+- `docs/architecture.md`
+  v3 architecture notes and engine extraction plan.
+
+- `docs/engine_contract.md`
+  Shared-engine boundary and drift-control rules while indicator and strategy still keep the larger signal calculation block local.
+
+- `docs/usage_workflow.md`
+  Practical chart-review and strategy-testing workflow.
+
+- `docs/release_checklist.md`
+  Compile, visual, strategy, alert, and documentation checks before a version is considered stable.
+
+- `docs/scoring_model.md`
+  Scoring mode weights and defaults.
+
+- `docs/setup_classifications.md`
+  Classification definitions and intended actions.
+
 - `dual_trend_momentum_indicator_v2_2.pine`
-  Current indicator version with v2.2 scoring modes, dashboard modes, stop/target modes, JSON alerts, and v2.1 correctness fixes.
+  Stable v2.2 indicator baseline.
 
 - `dual_trend_momentum_strategy_v2_2.pine`
-  Current strategy tester with v2.2 controls and setup-type-specific entry toggles.
+  Stable v2.2 strategy baseline.
 
 - `dual_trend_momentum_strategy_v2_3.pine`
   Phase 3 strategy tester with market-regime split filters for backtest isolation.
@@ -126,7 +158,7 @@ Market risk-off uses:
 
 ## Strategy Tester
 
-Use `dual_trend_momentum_strategy_v2_3.pine` in TradingView Strategy Tester for Phase 3 regime-split testing. Use `dual_trend_momentum_strategy_v2_2.pine` as the stable v2.2 baseline.
+Use `src/dual_trend_momentum_strategy_v3.pine` in TradingView Strategy Tester for current testing. Use `dual_trend_momentum_strategy_v2_3.pine` as the stable Phase 3 baseline.
 
 Entry toggles:
 
@@ -187,10 +219,12 @@ Both scripts expose alert conditions for:
 ## TradingView Workflow
 
 1. Open a chart.
-2. Paste or import the current indicator script.
+2. Paste or import `src/dual_trend_momentum_indicator_v3.pine`.
 3. Review the score table and last-bar label.
-4. Use the strategy tester script separately to compare entry and exit rules.
+4. Use `src/dual_trend_momentum_strategy_v3.pine` separately to compare entry and exit rules.
 5. Compile both scripts after changes; Pine warnings often point to history-dependent calculations that need to be assigned before use.
+
+For the full workflow, see `docs/usage_workflow.md`.
 
 ## Backtesting Workflow
 
