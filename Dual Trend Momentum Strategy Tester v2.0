@@ -109,6 +109,10 @@ failedBreakoutBars = input.int(8, "Failed Breakout Window", minval=1, group=grou
 
 atrWarnPct = input.float(6.0, "ATR % Warning", step=0.1, group=groupRisk)
 atrDangerPct = input.float(10.0, "ATR % Danger", step=0.1, group=groupRisk)
+gapExhaustionPct = input.float(4.0, "Gap Exhaustion %", minval=0.5, step=0.1, group=groupRisk)
+gapExhaustionVolRatio = input.float(1.30, "Gap Exhaustion Volume Ratio", minval=0.1, step=0.05, group=groupRisk)
+minAvgVolume = input.float(300000, "Minimum Average Volume", minval=0.0, step=50000, group=groupRisk)
+useLiquidityWarning = input.bool(true, "Use Liquidity Warning", group=groupRisk)
 
 stopMode = input.string(
      "Recent swing low",
@@ -190,6 +194,7 @@ tradeMomentumContinuation = input.bool(false, "Trade Momentum Continuation", gro
 
 exitOnDangerSignal = input.bool(true, "Exit On Distribution / Failed Breakout / Blowoff", group=groupStrategy)
 exitOnMarketRiskOff = input.bool(true, "Exit On Market Risk-Off", group=groupStrategy)
+exitOnGapExhaustion = input.bool(true, "Exit On Gap Exhaustion", group=groupStrategy)
 exitOnCloseBelowMidSma = input.bool(false, "Exit On Close Below SMA 50", group=groupStrategy)
 moveStopToBreakeven = input.bool(true, "Move Stop To Breakeven", group=groupStrategy)
 breakevenAtR = input.float(1.0, "Breakeven Trigger R", minval=0.25, step=0.25, group=groupStrategy)
@@ -264,6 +269,10 @@ pctDistance(float valueA, float valueB, float denominator, float fallback) =>
 rollingSum(series float source, int length) =>
     math.sum(source, length)
 
+distributionBar(float volumeMultiplier, int averageVolumeLength) =>
+    distributionAvgVol = ta.sma(volume, averageVolumeLength)
+    close < open and volume > distributionAvgVol * volumeMultiplier and close < close[1] ? 1.0 : 0.0
+
 
 // ============================================================================
 // Core indicators
@@ -300,7 +309,7 @@ marketRocMedium = request.security(marketSymbol, timeframe.period, rocPct(close,
 marketDistributionCount = request.security(
      marketSymbol,
      timeframe.period,
-     math.sum(close < open and volume > ta.sma(volume, volLen) * 1.25 and close < close[1] ? 1.0 : 0.0, distributionLookback),
+     math.sum(distributionBar(1.25, volLen), distributionLookback),
      gaps=barmerge.gaps_off,
      lookahead=barmerge.lookahead_off
 )
@@ -657,11 +666,20 @@ volumeDryUp =
      shortVolAvg < avgVol and
      redVolDeclining
 
+liquidityWarning =
+     useLiquidityWarning and
+     avgVol < minAvgVolume
+
 
 // ============================================================================
 // Candle quality
 // ============================================================================
 candleRange = high - low
+
+gapUpPct =
+     close[1] > 0.0
+         ? (open - close[1]) / close[1] * 100.0
+         : 0.0
 
 strongClose =
      candleRange > 0.0
@@ -677,6 +695,19 @@ heavyRedNow =
      close < open and
      volRatio > heavyRedVolRatio and
      candleRange > atr
+
+gapExhaustion =
+     gapUpPct >= gapExhaustionPct and
+     volRatio >= gapExhaustionVolRatio and
+     (
+         strongClose < 0.55 or
+         close < open or
+         upperWickPct > 35.0
+     ) and
+     (
+         extensionMidPct > extensionWarnPct or
+         rsi > 70.0
+     )
 
 distributionCount =
      rollingSum(
@@ -855,7 +886,7 @@ setupScore += atrPct <= atrWarnPct ? 0.20 : 0.0
 // Cleanliness, max 1.0
 setupScore += not heavyRedNow ? 0.30 : 0.0
 setupScore += distributionCount < 3.0 ? 0.30 : 0.0
-setupScore += not failedBreakout ? 0.40 : 0.0
+setupScore += not failedBreakout and not gapExhaustion ? 0.40 : 0.0
 
 setupScore := clamp(setupScore, 0.0, 10.0)
 
@@ -874,6 +905,8 @@ riskScore += nearResistance and not freshBreakout ? 0.7 : 0.0
 riskScore += heavyRedNow ? 1.5 : 0.0
 riskScore += distributionCount >= 3.0 ? 1.5 : 0.0
 riskScore += failedBreakout ? 2.0 : 0.0
+riskScore += gapExhaustion ? 1.5 : 0.0
+riskScore += liquidityWarning ? 0.8 : 0.0
 riskScore += atrPct > atrWarnPct ? 0.7 : 0.0
 riskScore += atrPct > atrDangerPct ? 1.0 : 0.0
 riskScore += marketRiskOff ? 1.5 : marketRegime == MARKET_BEARISH ? 1.0 : marketRegime == MARKET_MIXED ? 0.4 : 0.0
@@ -917,6 +950,7 @@ blowoffTop =
 distributionRisk =
      distributionCount >= 3.0 or
      heavyRedNow or
+     gapExhaustion or
      close < smaMid and rsi < 45.0 and volume > avgVol * 1.20
 
 rsiCollapse = rsiPullbackLow < 35.0
@@ -1220,6 +1254,11 @@ marketRiskOffExit =
      exitOnMarketRiskOff and
      marketRiskOff
 
+gapExhaustionExit =
+     strategy.position_size > 0 and
+     exitOnGapExhaustion and
+     gapExhaustion
+
 midSmaExit =
      strategy.position_size > 0 and
      exitOnCloseBelowMidSma and
@@ -1241,6 +1280,9 @@ if dangerExit
 
 if marketRiskOffExit
     strategy.close(activeEntryId, comment="Market risk-off exit")
+
+if gapExhaustionExit
+    strategy.close(activeEntryId, comment="Gap exhaustion exit")
 
 if midSmaExit
     strategy.close(activeEntryId, comment="SMA 50 exit")
@@ -1387,6 +1429,8 @@ if barstate.islast and showLabel
          "\nStop: " + str.tostring(suggestedStop, format.mintick) +
          " | " + str.tostring(targetRewardMultiple, "#.##") + "R: " + str.tostring(target2R, format.mintick) +
          "\nR/R: " + rrText + " | " + buyableText +
+         "\nGap exhaust: " + str.tostring(gapExhaustion) +
+         " | Liq warn: " + str.tostring(liquidityWarning) +
          "\nExt50: " + str.tostring(extensionMidPct, "#.0") + "%" +
          " | ATR: " + str.tostring(atrPct, "#.0") + "%"
 
@@ -1404,7 +1448,7 @@ if barstate.islast and showLabel
 // ============================================================================
 // Score table
 // ============================================================================
-var table scoreTable = table.new(position.top_right, 2, 58, border_width=1)
+var table scoreTable = table.new(position.top_right, 2, 63, border_width=1)
 
 if barstate.islast and showTable
     table.cell(scoreTable, 0, 0, "Metric", bgcolor=color.black, text_color=color.white)
@@ -1585,6 +1629,21 @@ if barstate.islast and showTable
     table.cell(scoreTable, 0, 57, "Risk-off penalty")
     table.cell(scoreTable, 1, 57, marketRiskOff ? str.tostring(marketRiskOffPenalty, "#.##") : "0")
 
+    table.cell(scoreTable, 0, 58, "Gap exhaustion")
+    table.cell(scoreTable, 1, 58, str.tostring(gapExhaustion), bgcolor=gapExhaustion ? color.new(color.red, 0) : color.new(color.green, 0), text_color=color.white)
+
+    table.cell(scoreTable, 0, 59, "Gap up %")
+    table.cell(scoreTable, 1, 59, str.tostring(gapUpPct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 60, "Liquidity warning")
+    table.cell(scoreTable, 1, 60, str.tostring(liquidityWarning), bgcolor=liquidityWarning ? color.new(color.orange, 0) : color.new(color.green, 0), text_color=color.white)
+
+    table.cell(scoreTable, 0, 61, "Avg volume")
+    table.cell(scoreTable, 1, 61, str.tostring(avgVol, "#"))
+
+    table.cell(scoreTable, 0, 62, "Gap exit")
+    table.cell(scoreTable, 1, 62, exitOnGapExhaustion ? "On" : "Off")
+
 
 // ============================================================================
 // Alerts
@@ -1599,6 +1658,8 @@ alertcondition(filteredPullback, "Filtered pullback", "Pullback setup detected b
 alertcondition(filteredMomentum, "Filtered momentum", "Momentum setup detected but market, relative strength, or HTF filter failed.")
 alertcondition(trendRepair, "Trend repair", "Trend repair detected.")
 alertcondition(distributionRisk, "Distribution risk", "Distribution risk detected.")
+alertcondition(gapExhaustion, "Gap exhaustion", "Gap exhaustion risk detected.")
+alertcondition(liquidityWarning, "Liquidity warning", "Average volume is below the configured liquidity threshold.")
 alertcondition(marketRiskOff, "Market risk-off", "Market risk-off regime detected.")
 alertcondition(useSectorBenchmark and not sectorRelativeStrengthGateOk, "Sector RS failed", "Sector relative strength filter failed.")
 alertcondition(failedBreakout, "Failed breakout", "Failed breakout detected.")
