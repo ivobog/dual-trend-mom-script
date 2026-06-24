@@ -97,6 +97,19 @@ failedBreakoutBars = input.int(8, "Failed Breakout Window", minval=1, group=grou
 atrWarnPct = input.float(6.0, "ATR % Warning", step=0.1, group=groupRisk)
 atrDangerPct = input.float(10.0, "ATR % Danger", step=0.1, group=groupRisk)
 
+stopMode = input.string(
+     "Recent swing low",
+     "Suggested Stop Mode",
+     options=["Recent swing low", "SMA 50 minus ATR buffer", "ATR multiple"],
+     group=groupRisk
+)
+atrStopMultiple = input.float(1.50, "ATR Stop Multiple", minval=0.1, step=0.1, group=groupRisk)
+smaStopAtrBuffer = input.float(0.50, "SMA 50 Stop ATR Buffer", minval=0.0, step=0.1, group=groupRisk)
+targetRewardMultiple = input.float(2.0, "Target R Multiple", minval=0.5, step=0.25, group=groupRisk)
+minRewardRisk = input.float(2.0, "Minimum Reward/Risk", minval=0.5, step=0.25, group=groupRisk)
+useRewardRiskFilter = input.bool(true, "Require Reward/Risk For Buyable Signals", group=groupRisk)
+showRiskRewardPlots = input.bool(true, "Show Stop / Target Lines", group=groupRisk)
+
 
 // ============================================================================
 // Inputs: Market Regime + Relative Strength
@@ -281,10 +294,11 @@ rsSma = ta.sma(rsLine, rsSmaLen)
 rsRocShort = rocPct(rsLine, rocShortLen)
 rsRocMedium = rocPct(rsLine, rocMediumLen)
 rsRocLong = rocPct(rsLine, rocLongLen)
+rsLineHigh = ta.highest(rsLine, rsNewHighLookback)
 
 rsNewHigh =
      not na(rsLine) and
-     rsLine >= ta.highest(rsLine, rsNewHighLookback)
+     rsLine >= rsLineHigh
 
 stockBeatsBenchmarkShort = stockRocShort > benchmarkRocShort
 stockBeatsBenchmarkMedium = stockRocMedium > benchmarkRocMedium
@@ -451,6 +465,7 @@ range52 = math.max(high52 - low52, syminfo.mintick)
 position52 = (close - low52) / range52 * 100.0
 
 near52High = high52 > 0.0 ? (high52 - close) / high52 * 100.0 <= 15.0 : false
+close20High = ta.highest(close[1], 20)
 
 
 // ============================================================================
@@ -585,6 +600,47 @@ failedBreakout =
 
 
 // ============================================================================
+// Risk / reward helper
+// ============================================================================
+swingLowStop = recentLow
+smaAtrStop = smaMid - atr * smaStopAtrBuffer
+atrMultipleStop = close - atr * atrStopMultiple
+
+rawSuggestedStop =
+     stopMode == "SMA 50 minus ATR buffer" ? smaAtrStop :
+     stopMode == "ATR multiple" ? atrMultipleStop :
+     swingLowStop
+
+suggestedStop =
+     not na(rawSuggestedStop) and rawSuggestedStop < close
+         ? rawSuggestedStop
+         : atrMultipleStop
+
+entryRisk = close - suggestedStop
+entryRiskPct = close > 0.0 and entryRisk > 0.0 ? entryRisk / close * 100.0 : na
+
+target2R = entryRisk > 0.0 ? close + entryRisk * targetRewardMultiple : na
+
+resistanceDistancePct =
+     not na(prevResistance) and prevResistance > close and close > 0.0
+         ? (prevResistance - close) / close * 100.0
+         : na
+
+rewardToResistance = not na(prevResistance) and prevResistance > close ? prevResistance - close : na
+rewardRiskToResistance =
+     not na(rewardToResistance) and entryRisk > 0.0
+         ? rewardToResistance / entryRisk
+         : na
+
+rewardRiskOk =
+     not useRewardRiskFilter or
+     na(rewardRiskToResistance) or
+     rewardRiskToResistance >= minRewardRisk
+
+entryFiltersOk = allFiltersOk and rewardRiskOk
+
+
+// ============================================================================
 // Step 3 retained + Step 4 blended: Trend Score 0-10
 // ============================================================================
 localTrendScore = 0.0
@@ -615,7 +671,10 @@ localTrendScore += position52 >= 70.0 ? 0.80 : position52 >= 50.0 ? 0.40 : 0.0
 localTrendScore += near52High ? 0.70 : 0.0
 localTrendScore += higherHigh ? 0.50 : 0.0
 localTrendScore += higherLow ? 0.50 : 0.0
-localTrendScore += close > ta.highest(close[1], 20) ? 0.50 : 0.0
+rsiPullbackLow = ta.lowest(rsi, pullbackLookback)
+close10High = ta.highest(close[1], 10)
+
+localTrendScore += close > close20High ? 0.50 : 0.0
 
 localTrendScore := clamp(localTrendScore, 0.0, 10.0)
 
@@ -646,8 +705,8 @@ momentumScore += stockBeatsBenchmarkMedium ? 0.35 : 0.0
 // RSI momentum, max 1.5
 momentumScore += rsi >= 55.0 and rsi <= 70.0 ? 0.70 : rsi >= 50.0 and rsi <= 75.0 ? 0.40 : 0.0
 momentumScore += rsi > rsi[1] ? 0.30 : 0.0
-momentumScore += ta.lowest(rsi, pullbackLookback) > 40.0 ? 0.30 : 0.0
-momentumScore += ta.lowest(rsi, pullbackLookback) < 50.0 and rsi > 55.0 ? 0.20 : 0.0
+momentumScore += rsiPullbackLow > 40.0 ? 0.30 : 0.0
+momentumScore += rsiPullbackLow < 50.0 and rsi > 55.0 ? 0.20 : 0.0
 
 // Volume / accumulation, max 2.0
 momentumScore += greenBeatsRed ? 0.45 : 0.0
@@ -684,13 +743,13 @@ setupScore += strongClose >= 0.65 ? 0.50 : 0.0
 
 // Breakout / trigger quality, max 2.0
 setupScore += freshBreakout ? 0.80 : 0.0
-setupScore += close > ta.highest(close[1], 10) ? 0.40 : 0.0
+setupScore += close > close10High ? 0.40 : 0.0
 setupScore += volRatio >= 1.20 and close > open ? 0.40 : 0.0
 setupScore += close > emaFast ? 0.40 : 0.0
 
 // Entry comfort / extension, max 2.0
 setupScore += extensionMidPct <= extensionWarnPct ? 0.80 : 0.0
-setupScore += not nearResistance or freshBreakout ? 0.50 : 0.0
+setupScore += rewardRiskOk ? 0.50 : 0.0
 setupScore += rsi >= 50.0 and rsi <= 70.0 ? 0.50 : 0.0
 setupScore += atrPct <= atrWarnPct ? 0.20 : 0.0
 
@@ -760,7 +819,7 @@ distributionRisk =
      heavyRedNow or
      close < smaMid and rsi < 45.0 and volume > avgVol * 1.20
 
-rsiCollapse = ta.lowest(rsi, pullbackLookback) < 35.0
+rsiCollapse = rsiPullbackLow < 35.0
 
 
 // ============================================================================
@@ -778,7 +837,7 @@ primeCleanPullback =
      rsi >= 50.0 and
      rsi <= 70.0 and
      extensionMidPct <= extensionWarnPct and
-     allFiltersOk and
+     entryFiltersOk and
      not distributionRisk and
      not blowoffTop and
      not failedBreakout
@@ -795,7 +854,7 @@ cleanBullPullback =
      close > smaMid and
      rsi >= 50.0 and
      rsi <= 70.0 and
-     allFiltersOk and
+     entryFiltersOk and
      not distributionRisk and
      not blowoffTop and
      not failedBreakout
@@ -807,7 +866,7 @@ freshBreakoutSignal =
      riskScore <= 4.5 and
      freshBreakout and
      strongClose >= 0.65 and
-     allFiltersOk and
+     entryFiltersOk and
      not distributionRisk and
      not blowoffTop and
      not failedBreakout
@@ -844,7 +903,7 @@ extendedMomentum =
      )
 
 filteredPullback =
-     not allFiltersOk and
+     not entryFiltersOk and
      trendScore >= 7.0 and
      setupScore >= 7.0 and
      hadPullback and
@@ -855,7 +914,7 @@ filteredPullback =
      not failedBreakout
 
 filteredMomentum =
-     not allFiltersOk and
+     not entryFiltersOk and
      trendScore >= 6.5 and
      momentumScore >= 7.0 and
      not distributionRisk and
@@ -894,12 +953,21 @@ filterProblem =
      not marketGateOk ? "Market failed" :
      not relativeStrengthGateOk ? "RS failed" :
      not htfGateOk ? "HTF failed" :
+     not rewardRiskOk ? "R/R failed" :
      "Filter failed"
 
+rrText =
+     na(rewardRiskToResistance)
+         ? "Open"
+         : str.tostring(rewardRiskToResistance, "#.0") + "R"
+
+buyableText =
+     rewardRiskOk ? "R/R ok" : "R/R below " + str.tostring(minRewardRisk, "#.0") + "R"
+
 actionBias =
-     classification == CLASS_PRIME_PULLBACK ? "Best buyable if R/R >= 2R" :
-     classification == CLASS_CLEAN_PULLBACK ? "Buyable if R/R >= 2R" :
-     classification == CLASS_FRESH_BREAKOUT ? "Breakout buy, smaller size" :
+     classification == CLASS_PRIME_PULLBACK ? "Best buyable, " + buyableText :
+     classification == CLASS_CLEAN_PULLBACK ? "Buyable, " + buyableText :
+     classification == CLASS_FRESH_BREAKOUT ? "Breakout buy, " + buyableText :
      classification == CLASS_MOMENTUM_CONT ? "Watch / trail / smaller size" :
      classification == CLASS_EXTENDED_MOMENTUM ? "Do not chase, wait mini-pullback" :
      classification == CLASS_FILTERED_PULLBACK ? "Good chart, " + filterProblem :
@@ -975,6 +1043,11 @@ plot(position52, "52-week position %", display=display.data_window)
 plot(showMarketRsPlots ? rsLine : na, "RS Line", color=color.new(color.fuchsia, 0), linewidth=1)
 plot(showMarketRsPlots ? rsSma : na, "RS SMA", color=color.new(color.fuchsia, 60), linewidth=2)
 
+plot(showRiskRewardPlots ? suggestedStop : na, "Suggested stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(showRiskRewardPlots ? target2R : na, "R target", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+plot(entryRiskPct, "Entry risk %", display=display.data_window)
+plot(rewardRiskToResistance, "Reward/risk to resistance", display=display.data_window)
+
 plot(showDebugPlots ? adx : na, "ADX", display=display.data_window)
 plot(showDebugPlots ? plusDI : na, "+DI", display=display.data_window)
 plot(showDebugPlots ? minusDI : na, "-DI", display=display.data_window)
@@ -1015,6 +1088,9 @@ if barstate.islast and showLabel
          "\nRS: " + relativeStrengthStatus + " " + str.tostring(relativeStrengthScore, "#.0") +
          "\nHTF: " + htfStatus + " " + str.tostring(htfScore, "#.0") +
          "\nPullback: " + pullbackHealth +
+         "\nStop: " + str.tostring(suggestedStop, format.mintick) +
+         " | " + str.tostring(targetRewardMultiple, "#.##") + "R: " + str.tostring(target2R, format.mintick) +
+         "\nR/R: " + rrText + " | " + buyableText +
          "\nExt50: " + str.tostring(extensionMidPct, "#.0") + "%" +
          " | ATR: " + str.tostring(atrPct, "#.0") + "%"
 
@@ -1032,7 +1108,7 @@ if barstate.islast and showLabel
 // ============================================================================
 // Score table
 // ============================================================================
-var table scoreTable = table.new(position.top_right, 2, 26, border_width=1)
+var table scoreTable = table.new(position.top_right, 2, 32, border_width=1)
 
 if barstate.islast and showTable
     table.cell(scoreTable, 0, 0, "Metric", bgcolor=color.black, text_color=color.white)
@@ -1112,6 +1188,24 @@ if barstate.islast and showTable
 
     table.cell(scoreTable, 0, 25, "HTF ROC")
     table.cell(scoreTable, 1, 25, str.tostring(htfRoc, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 26, "Stop mode")
+    table.cell(scoreTable, 1, 26, stopMode)
+
+    table.cell(scoreTable, 0, 27, "Suggested stop")
+    table.cell(scoreTable, 1, 27, str.tostring(suggestedStop, format.mintick))
+
+    table.cell(scoreTable, 0, 28, str.tostring(targetRewardMultiple, "#.##") + "R target")
+    table.cell(scoreTable, 1, 28, str.tostring(target2R, format.mintick))
+
+    table.cell(scoreTable, 0, 29, "Entry risk")
+    table.cell(scoreTable, 1, 29, str.tostring(entryRiskPct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 30, "Resistance dist")
+    table.cell(scoreTable, 1, 30, na(resistanceDistancePct) ? "Open" : str.tostring(resistanceDistancePct, "#.0") + "%")
+
+    table.cell(scoreTable, 0, 31, "Reward/risk")
+    table.cell(scoreTable, 1, 31, rrText + " / " + buyableText, bgcolor=rewardRiskOk ? color.new(color.green, 0) : color.new(color.red, 0), text_color=color.white)
 
 
 // ============================================================================
